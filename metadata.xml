@@ -29,6 +29,11 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [h2]Current Version[/h2]
 
+1.5.0 restores a stable native input sequence for Tainted Azazel: one shoot
+trigger starts the sneeze, a consistent held direction continues charging, and a
+short release debounce filters controller dropouts without spawning attacks from
+the mod. Analog Stick keeps its 360-degree aiming support.
+
 [h2]Notes[/h2]
 
 Mod Config Menu is optional. The mod works normally with its default settings even without MCM.
@@ -42,7 +47,7 @@ I will continue maintaining this mod, but updates will be less frequent than bef
 The original purpose of this mod is simply to improve the controller experience before the related Repentance+ issues are officially fixed.
 
 Hopefully, controller players will eventually be able to fire Brimstone smoothly with the analog stick even without this mod.</description>
-    <version>1.3.2</version>
+    <version>1.5.0</version>
     <visibility>Public</visibility>
     <tag id="Lua"/>
     <tag id="Tweaks"/>

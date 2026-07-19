@@ -1,0 +1,9 @@
+.DS_Store
+*.log
+*.luac
+
+# Local Steam account name only; never commit credentials.
+.steam-workshop.env
+
+# SteamCMD build files are generated in a temporary directory.
+workshop_build_item.vdf
