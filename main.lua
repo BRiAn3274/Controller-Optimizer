@@ -1,6 +1,7 @@
 ﻿local MOD_NAME = "Controller Optimizer"
-local VERSION = "1.5.1"
+local VERSION = "1.6.0"
 local mod = RegisterMod(MOD_NAME, 1)
+local IS_REPENTANCE_PLUS = REPENTANCE_PLUS == true
 
 -- ============================================================
 -- 配置区
@@ -13,18 +14,17 @@ local Config = {
     -- 保持开启可降低兼容风险：普通眼泪射击不会被 Brimstone 保持逻辑接管。
     OnlyBrimstoneTargets = true,
     EyeOfTheOccultPassThrough = true,
+    -- Analog Stick 保留完整二维方向；只滤除死区、回中和回弹，不再吸附到四方向。
+    AnalogStick360Enabled = true,
 
     -- 摇杆超过 EnterDeadzone 才选择新方向；低于 ExitDeadzone 后才进入释放保持计时。
     EnterDeadzone = 0.35,
     ExitDeadzone = 0.20,
 
-    -- 所有帧数都按 Isaac.GetFrameCount() 计数；不同游戏版本下不要直接换算为渲染 FPS。
-    ReleaseHoldFrames = 8,
-    SoftReleaseFrames = 18,
-
-    -- 有意拨动后保持最后激光方向，避免 Steam Deck 摇杆回中时让 Brimstone 立刻收束。
-    BeamHoldFrames = 45,
-    -- 有跟随宝宝时优先释放输入；玩家本体激光只做短过渡保护。
+    -- 只掩盖极短的摇杆采样掉帧；稳定回中后立即把释放交还给游戏。
+    -- 不能用长保持窗口，否则 Brimstone 会在玩家松手后继续蓄力。
+    ShootReleaseDebounceFrames = 2,
+    -- 有跟随宝宝时沿用旧版兼容路径：优先释放输入，玩家本体激光只做短过渡保护。
     ChargeFamiliarCompatibility = true,
     ChargeFamiliarReleaseFrames = 0,
     ChargeFamiliarLaserHoldFrames = 8,
@@ -33,14 +33,19 @@ local Config = {
 
     -- 忽略摇杆回弹造成的短暂、较弱反向尖峰。
     ReverseGuardFrames = 5,
-    ReverseGuardMaxMagnitude = 0.65,
     ReverseGuardDot = -0.35,
 
-    -- 对 Brimstone 方向选择而言，数字 0/1 输出比模拟量更稳定。
+    -- 普通 Brimstone 使用数字方向；Analog Stick 会自动切换为 360° 模拟输出。
     DigitalOutput = true,
     DirectionSwitchMargin = 0.22,
 
-    -- 里阿萨谢勒不再使用专用输入补偿，只作为 Brimstone 类目标走通用滤波。
+    -- 里阿撒泻勒需要一次干净的 triggered 启动咳血，随后保持同一输入完成蓄力。
+    -- 这里只重建输入契约，不直接生成咳血、激光或伤害。
+    TaintedAzazelInputFix = true,
+    TaintedAzazelConfirmFrames = 1,
+    TaintedAzazelConfirmMagnitude = 0.65,
+    TaintedAzazelReleaseDebounceFrames = 2,
+    TaintedAzazelRearmFrames = 2,
 
     -- 火星只做左摇杆误触防护，不提供左摇杆主动触发辅助。
     MarsAnalogGuardEnabled = true,
@@ -122,6 +127,7 @@ local function detectFatalError()
         Input.GetActionValue == nil or
         Input.IsButtonPressed == nil or
         InputHook == nil or
+        InputHook.IS_ACTION_PRESSED == nil or
         InputHook.GET_ACTION_VALUE == nil or
         InputHook.IS_ACTION_TRIGGERED == nil or
         ModCallbacks == nil or
@@ -171,6 +177,11 @@ local function clampInteger(value, minimum, maximum, defaultValue)
 end
 
 local function sanitizeConfig()
+    Config.ShootReleaseDebounceFrames = clampInteger(Config.ShootReleaseDebounceFrames, 0, 5, 2)
+    Config.TaintedAzazelConfirmFrames = clampInteger(Config.TaintedAzazelConfirmFrames, 0, 5, 1)
+    Config.TaintedAzazelConfirmMagnitude = clampNumber(Config.TaintedAzazelConfirmMagnitude, 0.35, 1, 0.65)
+    Config.TaintedAzazelReleaseDebounceFrames = clampInteger(Config.TaintedAzazelReleaseDebounceFrames, 0, 5, 2)
+    Config.TaintedAzazelRearmFrames = clampInteger(Config.TaintedAzazelRearmFrames, 1, 8, 2)
     Config.ChargeFamiliarReleaseFrames = clampInteger(Config.ChargeFamiliarReleaseFrames, 0, 15, 0)
     Config.ChargeFamiliarLaserHoldFrames = clampInteger(Config.ChargeFamiliarLaserHoldFrames, 0, 30, 8)
     Config.ChargeFamiliarLaserCaptureFrames = clampInteger(Config.ChargeFamiliarLaserCaptureFrames, 0, 30, 8)
@@ -195,7 +206,10 @@ local function appendDiagnosticState(reason)
     appendDiagnosticLog(
         tostring(reason) ..
         " version=" .. VERSION ..
+        " repentancePlus=" .. encodeBool(IS_REPENTANCE_PLUS) ..
         " enabled=" .. encodeBool(Config.Enabled) ..
+        " analog360=" .. encodeBool(Config.AnalogStick360Enabled) ..
+        " taintedAzazel=" .. encodeBool(Config.TaintedAzazelInputFix) ..
         " mars=" .. encodeBool(Config.MarsAnalogGuardEnabled) ..
         " schoolbag=" .. encodeBool(Config.ActiveSwapEnabled) ..
         " familiarRelease=" .. encodeBool(Config.ChargeFamiliarCompatibility) ..
@@ -222,6 +236,7 @@ local function saveSettings()
     mod:SaveData(
         "version=" .. VERSION .. "\n" ..
         "Enabled=" .. encodeBool(Config.Enabled) .. "\n" ..
+        "TaintedAzazelInputFix=" .. encodeBool(Config.TaintedAzazelInputFix) .. "\n" ..
         "MarsAnalogGuardEnabled=" .. encodeBool(Config.MarsAnalogGuardEnabled) .. "\n" ..
         "ActiveSwapEnabled=" .. encodeBool(Config.ActiveSwapEnabled) .. "\n" ..
         "DiagnosticLogging=" .. encodeBool(Config.DiagnosticLogging) .. "\n" ..
@@ -242,6 +257,8 @@ local function loadSettings()
         local key, value = string.match(line, "^([^=]+)=(.*)$")
         if key == "Enabled" then
             Config.Enabled = decodeBool(value, Config.Enabled)
+        elseif key == "TaintedAzazelInputFix" then
+            Config.TaintedAzazelInputFix = decodeBool(value, Config.TaintedAzazelInputFix)
         elseif key == "MarsAnalogGuardEnabled" then
             Config.MarsAnalogGuardEnabled = decodeBool(value, Config.MarsAnalogGuardEnabled)
         elseif key == "ActiveSwapEnabled" then
@@ -345,6 +362,32 @@ local function registerModConfigMenu()
         {
             Type = ModConfigMenu.OptionType.BOOLEAN,
             CurrentSetting = function()
+                return Config.TaintedAzazelInputFix
+            end,
+            Display = function()
+                return "Tainted Azazel native input (Rep+): " ..
+                    (Config.TaintedAzazelInputFix and "on" or "off")
+            end,
+            OnChange = function(value)
+                Config.TaintedAzazelInputFix = value
+                sanitizeConfig()
+                resetInputState()
+                saveSettings()
+            end,
+            Info = {
+                "Only activates when the REPENTANCE_PLUS API flag is present.",
+                "Rebuilds one trigger, then follows the live held direction.",
+                "The game still creates the sneeze, charge and Brimstone beam.",
+            },
+        }
+    )
+
+    ModConfigMenu.AddSetting(
+        MOD_NAME,
+        "General",
+        {
+            Type = ModConfigMenu.OptionType.BOOLEAN,
+            CurrentSetting = function()
                 return Config.MarsAnalogGuardEnabled
             end,
             Display = function()
@@ -422,6 +465,13 @@ local function getEyeOfTheOccultId()
         return CollectibleType.COLLECTIBLE_EYE_OF_THE_OCCULT
     end
     return 572
+end
+
+local function getAnalogStickId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_ANALOG_STICK ~= nil then
+        return CollectibleType.COLLECTIBLE_ANALOG_STICK
+    end
+    return 465
 end
 
 local function refreshChargeFamiliarCache()
@@ -607,6 +657,17 @@ local function getControllerState(controllerIndex)
             outUp = 0,
             outDown = 0,
             outputDir = nil,
+            analogAim = false,
+            taintedMode = nil,
+            taintedArmed = true,
+            taintedCandidateFrame = nil,
+            taintedCandidateX = 0,
+            taintedCandidateY = 0,
+            taintedCenterStartFrame = nil,
+            triggerFrame = -9999,
+            suppressRawShootInput = false,
+            releaseStartFrame = nil,
+            lastSnapbackLogFrame = -9999,
             releaseReason = "none",
             mars = {
                 frame = -1,
@@ -647,6 +708,31 @@ local function getControllerState(controllerIndex)
     return state
 end
 
+local function resetShootState(state)
+    state.frame = -1
+    state.active = false
+    state.lastActiveFrame = -9999
+    state.rawMagnitude = 0
+    state.x = 0
+    state.y = 0
+    state.outLeft = 0
+    state.outRight = 0
+    state.outUp = 0
+    state.outDown = 0
+    state.outputDir = nil
+    state.analogAim = false
+    state.taintedArmed = true
+    state.taintedCandidateFrame = nil
+    state.taintedCandidateX = 0
+    state.taintedCandidateY = 0
+    state.taintedCenterStartFrame = nil
+    state.triggerFrame = -9999
+    state.suppressRawShootInput = false
+    state.releaseStartFrame = nil
+    state.lastSnapbackLogFrame = -9999
+    state.releaseReason = "none"
+end
+
 -- 读取原始输入时会触发同一个 MC_INPUT_ACTION 链路；samplingRawInput
 -- 是递归保护，确保内部采样不会再次进入本 mod 的接管逻辑。
 local function rawActionValue(action, controllerIndex)
@@ -666,7 +752,7 @@ local function updateOutputs(state)
     local x = state.x
     local y = state.y
 
-    if Config.DigitalOutput then
+    if Config.DigitalOutput and not state.analogAim then
         local ax = math.abs(x)
         local ay = math.abs(y)
         local candidateDir = nil
@@ -766,10 +852,6 @@ local function isTaintedAzazel(player)
         player:GetPlayerType() == PlayerType.PLAYER_AZAZEL_B
 end
 
-local function getBeamHoldFrames(player)
-    return Config.BeamHoldFrames
-end
-
 local function playerHasCollectible(player, collectible)
     return player ~= nil and
         collectible ~= nil and
@@ -780,6 +862,11 @@ end
 local function hasEyeOfTheOccultPassThrough(player)
     return Config.EyeOfTheOccultPassThrough and
         playerHasCollectible(player, getEyeOfTheOccultId())
+end
+
+local function hasAnalogStickAim(player)
+    return Config.AnalogStick360Enabled and
+        playerHasCollectible(player, getAnalogStickId())
 end
 
 local function shouldFilterShootInput(player)
@@ -795,17 +882,7 @@ local function clearShootFilterState(controllerIndex)
         return
     end
 
-    state.frame = -1
-    state.active = false
-    state.lastActiveFrame = -9999
-    state.rawMagnitude = 0
-    state.x = 0
-    state.y = 0
-    state.outLeft = 0
-    state.outRight = 0
-    state.outUp = 0
-    state.outDown = 0
-    state.outputDir = nil
+    resetShootState(state)
     state.releaseReason = "passThrough"
 end
 
@@ -834,8 +911,6 @@ local function startChargeFamiliarLaserHold(controllerIndex, player, state, fram
         laser = laser,
         endFrame = frame + Config.ChargeFamiliarLaserHoldFrames,
         captureUntilFrame = frame + Config.ChargeFamiliarLaserCaptureFrames,
-        x = state.x,
-        y = state.y,
     }
 
     appendDiagnosticLog(
@@ -861,18 +936,6 @@ local function getActivePlayerLaser(player)
             if laser ~= nil then
                 return laser
             end
-        end
-    end
-
-    if Isaac == nil or Isaac.FindByType == nil or EntityType == nil or EntityType.ENTITY_LASER == nil then
-        return nil
-    end
-
-    local lasers = Isaac.FindByType(EntityType.ENTITY_LASER, -1, -1, false, false)
-    for _, entity in ipairs(lasers) do
-        local laser = entity ~= nil and entity.ToLaser ~= nil and entity:ToLaser() or nil
-        if laser ~= nil and (laser.SpawnerEntity == player or laser.Parent == player) then
-            return laser
         end
     end
 
@@ -1046,20 +1109,46 @@ local function shouldSuppressMarsAnalogInput(state, controllerIndex, buttonActio
             frame - dirState.lastAnalogFrame <= Config.MarsAnalogTriggerMemoryFrames)
 end
 
-local refreshControllerState
-
 -- ============================================================
 -- 右摇杆滤波主状态机
 -- ============================================================
--- 每帧读取一次右摇杆，处理死区、短暂释放保持、方向切换滞回和
--- 弱反向回弹过滤。输出值由 OnInputAction 按具体动作读取。
-refreshControllerState = function(state, controllerIndex, player)
+local function updateAnalogAimMode(state, controllerIndex, player)
+    local analogAim = hasAnalogStickAim(player)
+    if state.analogAim == analogAim then
+        return
+    end
+
+    state.analogAim = analogAim
+    updateOutputs(state)
+    appendDiagnosticLog(
+        "aim mode controller=" .. tostring(controllerIndex) ..
+        " mode=" .. (analogAim and "analog360" or "cardinal")
+    )
+end
+
+local function finishShootRelease(state, reason, suppressRaw)
+    state.active = false
+    state.x = 0
+    state.y = 0
+    state.releaseStartFrame = nil
+    state.triggerFrame = -9999
+    state.suppressRawShootInput = suppressRaw == true
+    state.releaseReason = reason
+    updateOutputs(state)
+end
+
+-- 普通 Brimstone/Azazel 只稳定方向值。triggered/pressed 仍由原版处理，
+-- 避免 Mod 把已经回中的摇杆继续伪装成“按住”而延迟发射。
+local function refreshGenericBrimstoneState(state, controllerIndex, player)
     local frame = Isaac.GetFrameCount()
     if state.frame == frame then
         return
     end
 
     state.frame = frame
+
+    state.suppressRawShootInput = false
+    updateAnalogAimMode(state, controllerIndex, player)
 
     local rawX, rawY = readStickVector(controllerIndex)
     local magnitude = math.sqrt(rawX * rawX + rawY * rawY)
@@ -1069,62 +1158,84 @@ refreshControllerState = function(state, controllerIndex, player)
         local x = rawX / magnitude
         local y = rawY / magnitude
         local dot = (x * state.x) + (y * state.y)
-        local framesSinceActive = frame - state.lastActiveFrame
-
+        local releaseAge = state.releaseStartFrame ~= nil and
+            frame - state.releaseStartFrame or nil
         local springBackSpike =
             state.active and
-            framesSinceActive <= Config.ReverseGuardFrames and
-            magnitude <= Config.ReverseGuardMaxMagnitude and
+            releaseAge ~= nil and
+            releaseAge <= Config.ReverseGuardFrames and
             dot <= Config.ReverseGuardDot
 
         if not springBackSpike then
+            local previousOutputDir = state.outputDir
             state.x = x
             state.y = y
             state.active = true
             state.lastActiveFrame = frame
+            state.releaseStartFrame = nil
             state.releaseReason = "active"
             updateOutputs(state)
+            if previousOutputDir ~= state.outputDir then
+                appendDiagnosticLog(
+                    "direction controller=" .. tostring(controllerIndex) ..
+                    " mode=" .. (state.analogAim and "analog360" or "cardinal") ..
+                    " raw=" .. string.format("%.3f,%.3f", rawX, rawY) ..
+                    " out=" .. string.format("%.3f,%.3f", state.x, state.y)
+                )
+            end
+        else
+            -- 只有已经经过中心的短反向尖峰才作为 snapback。保持该帧为
+            -- 释放态；若反向输入持续，下一帧会作为新的原生攻击交还游戏。
+            if releaseAge >= Config.ShootReleaseDebounceFrames then
+                finishShootRelease(state, "snapbackReleased", true)
+            elseif frame - state.lastSnapbackLogFrame > Config.ReverseGuardFrames then
+                state.lastSnapbackLogFrame = frame
+                appendDiagnosticLog(
+                    "snapback rejected controller=" .. tostring(controllerIndex) ..
+                    " raw=" .. string.format("%.3f,%.3f", rawX, rawY) ..
+                    " dot=" .. string.format("%.3f", dot)
+                )
+            end
         end
-    elseif state.active then
-        local framesSinceActive = frame - state.lastActiveFrame
+    elseif state.active and
+        (magnitude < Config.ExitDeadzone or state.releaseStartFrame ~= nil) then
+        if state.releaseStartFrame == nil then
+            state.releaseStartFrame = frame
+            appendDiagnosticLog(
+                "release pending controller=" .. tostring(controllerIndex) ..
+                " rawMagnitude=" .. string.format("%.3f", magnitude) ..
+                " direction=" .. string.format("%.3f,%.3f", state.x, state.y)
+            )
+        end
 
         if shouldUseChargeFamiliarReleasePath(player) and
-            magnitude < Config.EnterDeadzone and
-            framesSinceActive > Config.ChargeFamiliarReleaseFrames then
+            frame - state.lastActiveFrame > Config.ChargeFamiliarReleaseFrames then
             local chargeFamiliarLaser = getActivePlayerLaser(player)
             startChargeFamiliarLaserHold(controllerIndex, player, state, frame, chargeFamiliarLaser)
-            state.active = false
-            state.x = 0
-            state.y = 0
-            state.releaseReason = "chargeFamiliarReleased"
-            updateOutputs(state)
+            finishShootRelease(state, "chargeFamiliarReleased", false)
             return
         end
 
-        local beamHoldFrames = getBeamHoldFrames(player)
-        local hardHoldFrames = math.max(Config.ReleaseHoldFrames, beamHoldFrames)
-        local softHoldFrames = math.max(Config.SoftReleaseFrames, beamHoldFrames)
-        local hardRelease = magnitude < Config.ExitDeadzone and framesSinceActive > hardHoldFrames
-        local softRelease = magnitude < Config.EnterDeadzone and framesSinceActive > softHoldFrames
-
-        if hardRelease or softRelease then
-            state.active = false
-            state.x = 0
-            state.y = 0
-            state.releaseReason = hardRelease and "beamHoldExpiredHard" or "beamHoldExpiredSoft"
-            updateOutputs(state)
+        if frame - state.releaseStartFrame >= Config.ShootReleaseDebounceFrames then
+            finishShootRelease(state, "releasedAtCenter", false)
+            appendDiagnosticLog(
+                "released controller=" .. tostring(controllerIndex) ..
+                " reason=" .. tostring(state.releaseReason) ..
+                " rawMagnitude=" .. string.format("%.3f", magnitude)
+            )
         end
     end
 
     if Config.Debug and frame % 15 == 0 then
         Isaac.DebugString(
             string.format(
-                "[%s] c=%d raw=(%.2f, %.2f) active=%s last=%d age=%d out=(%.0f %.0f %.0f %.0f) reason=%s",
+                "[%s] c=%d raw=(%.2f, %.2f) active=%s analog=%s last=%d age=%d out=(%.2f %.2f %.2f %.2f) reason=%s",
                 MOD_NAME,
                 controllerIndex,
                 rawX,
                 rawY,
                 tostring(state.active),
+                tostring(state.analogAim),
                 state.lastActiveFrame,
                 frame - state.lastActiveFrame,
                 state.outLeft,
@@ -1134,6 +1245,157 @@ refreshControllerState = function(state, controllerIndex, player)
                 tostring(state.releaseReason)
             )
         )
+    end
+end
+
+-- 里阿撒泻勒的原生攻击依赖一次 triggered 启动咳血，随后由持续的
+-- pressed/value 继续蓄力。启动沿只生成一次，但蓄力方向必须实时跟随摇杆。
+-- 状态机只修复输入序列，游戏仍负责咳血、蓄力和 Brimstone 实体。
+local function refreshTaintedAzazelState(state, controllerIndex, player)
+    local frame = Isaac.GetFrameCount()
+    if state.frame == frame then
+        return
+    end
+
+    state.frame = frame
+    updateAnalogAimMode(state, controllerIndex, player)
+
+    local rawX, rawY = readStickVector(controllerIndex)
+    local magnitude = math.sqrt(rawX * rawX + rawY * rawY)
+    state.rawMagnitude = magnitude
+
+    if state.active then
+        state.suppressRawShootInput = true
+
+        if magnitude >= Config.EnterDeadzone then
+            local x = rawX / magnitude
+            local y = rawY / magnitude
+            local releaseAge = state.releaseStartFrame ~= nil and
+                frame - state.releaseStartFrame or nil
+            local dot = (x * state.x) + (y * state.y)
+            local springBackSpike = releaseAge ~= nil and
+                releaseAge <= Config.ReverseGuardFrames and
+                dot <= Config.ReverseGuardDot
+
+            if springBackSpike then
+                if releaseAge >= Config.TaintedAzazelReleaseDebounceFrames then
+                    state.taintedCenterStartFrame = nil
+                    finishShootRelease(state, "taintedReleasedAfterSnapback", true)
+                end
+            else
+                -- 持续推动期间每帧更新方向。这里只改变 value/pressed 的方向，
+                -- triggerFrame 不变，因此转向不会再次咳血。
+                state.x = x
+                state.y = y
+                state.releaseStartFrame = nil
+                state.lastActiveFrame = frame
+                state.releaseReason = "taintedCharging"
+                updateOutputs(state)
+            end
+        elseif magnitude < Config.ExitDeadzone or state.releaseStartFrame ~= nil then
+            if state.releaseStartFrame == nil then
+                state.releaseStartFrame = frame
+                state.releaseReason = "taintedReleasePending"
+                appendDiagnosticLog(
+                    "tainted release pending controller=" .. tostring(controllerIndex) ..
+                    " direction=" .. string.format("%.3f,%.3f", state.x, state.y)
+                )
+            end
+
+            if frame - state.releaseStartFrame >= Config.TaintedAzazelReleaseDebounceFrames then
+                state.taintedCenterStartFrame = state.releaseStartFrame
+                finishShootRelease(state, "taintedReleased", true)
+            end
+        else
+            -- 尚未真正回中的滞回带只保持当前方向，不自行制造释放。
+            state.lastActiveFrame = frame
+        end
+
+        return
+    end
+
+    if not state.taintedArmed then
+        state.taintedCandidateFrame = nil
+        state.suppressRawShootInput = true
+
+        if magnitude < Config.ExitDeadzone then
+            if state.taintedCenterStartFrame == nil then
+                state.taintedCenterStartFrame = frame
+            end
+            if frame - state.taintedCenterStartFrame >= Config.TaintedAzazelRearmFrames then
+                state.taintedArmed = true
+                state.taintedCenterStartFrame = nil
+                state.suppressRawShootInput = false
+                state.releaseReason = "taintedArmed"
+                appendDiagnosticLog("tainted rearmed controller=" .. tostring(controllerIndex))
+            end
+        else
+            state.taintedCenterStartFrame = nil
+        end
+        return
+    end
+
+    state.suppressRawShootInput = false
+    if magnitude < Config.EnterDeadzone then
+        state.taintedCandidateFrame = nil
+        -- 小于进入死区但仍非零的轴值不能漏回原版输入，否则游戏可能在
+        -- 状态机确认方向前自行产生一次不稳定的 triggered。
+        state.suppressRawShootInput = magnitude > 0.01
+        return
+    end
+
+    local x = rawX / magnitude
+    local y = rawY / magnitude
+    if state.taintedCandidateFrame == nil then
+        state.taintedCandidateFrame = frame
+    end
+    state.taintedCandidateX = x
+    state.taintedCandidateY = y
+    state.suppressRawShootInput = true
+
+    local candidateAge = frame - state.taintedCandidateFrame
+    if magnitude < Config.TaintedAzazelConfirmMagnitude and
+        candidateAge < Config.TaintedAzazelConfirmFrames then
+        state.releaseReason = "taintedAimConfirming"
+        return
+    end
+
+    state.x = state.taintedCandidateX
+    state.y = state.taintedCandidateY
+    state.active = true
+    state.lastActiveFrame = frame
+    state.taintedArmed = false
+    state.taintedCandidateFrame = nil
+    state.taintedCenterStartFrame = nil
+    state.releaseStartFrame = nil
+    state.triggerFrame = frame
+    state.releaseReason = "taintedTriggered"
+    updateOutputs(state)
+    appendDiagnosticLog(
+        "tainted triggered controller=" .. tostring(controllerIndex) ..
+        " mode=" .. (state.analogAim and "analog360" or "cardinal") ..
+        " raw=" .. string.format("%.3f,%.3f", rawX, rawY) ..
+        " direction=" .. string.format("%.3f,%.3f", state.x, state.y)
+    )
+end
+
+local function refreshControllerState(state, controllerIndex, player)
+    -- 普通 Repentance 的手柄路径本来正常；专用触发重建只在 Repentance+ 启用。
+    local taintedMode = IS_REPENTANCE_PLUS and
+        Config.TaintedAzazelInputFix and isTaintedAzazel(player)
+    if state.taintedMode ~= taintedMode then
+        resetShootState(state)
+        state.taintedMode = taintedMode
+        appendDiagnosticLog(
+            "shoot profile controller=" .. tostring(controllerIndex) ..
+            " profile=" .. (taintedMode and "taintedAzazel" or "brimstone")
+        )
+    end
+
+    if taintedMode then
+        refreshTaintedAzazelState(state, controllerIndex, player)
+    else
+        refreshGenericBrimstoneState(state, controllerIndex, player)
     end
 end
 
@@ -1149,6 +1411,77 @@ local function getPlayerFromEntity(entity)
         return nil
     end
     return entity:ToPlayer()
+end
+
+local function getShootOutput(state, buttonAction)
+    if buttonAction == ButtonAction.ACTION_SHOOTLEFT then
+        return state.outLeft
+    elseif buttonAction == ButtonAction.ACTION_SHOOTRIGHT then
+        return state.outRight
+    elseif buttonAction == ButtonAction.ACTION_SHOOTUP then
+        return state.outUp
+    elseif buttonAction == ButtonAction.ACTION_SHOOTDOWN then
+        return state.outDown
+    end
+    return nil
+end
+
+local function handleTaintedAzazelShootInput(state, inputHook, buttonAction)
+    local output = getShootOutput(state, buttonAction) or 0
+    -- 里阿撒泻勒由“稳定回中后重新武装”自行界定手势边界；重新武装后
+    -- 立即归还输入，不再叠加普通 Brimstone 的释放保护窗口。
+    local suppressInactive = state.suppressRawShootInput
+
+    if inputHook == InputHook.IS_ACTION_TRIGGERED then
+        if state.active then
+            return Isaac.GetFrameCount() == state.triggerFrame and output > 0.001
+        end
+        if suppressInactive then
+            return false
+        end
+        return nil
+    end
+
+    if isActionPressedHook(inputHook) then
+        if state.active then
+            return output > 0.001
+        end
+        if suppressInactive then
+            return false
+        end
+        return nil
+    end
+
+    if state.active then
+        return output
+    end
+    return suppressInactive and 0 or nil
+end
+
+local function handleGenericShootInput(state, inputHook, buttonAction)
+    if inputHook == InputHook.IS_ACTION_TRIGGERED or isActionPressedHook(inputHook) then
+        if state.releaseReason == "chargeFamiliarReleased" and
+            state.rawMagnitude < Config.EnterDeadzone then
+            return false
+        end
+        if state.suppressRawShootInput then
+            return false
+        end
+        -- 普通 Brimstone/Azazel 的按下沿与松开沿完全交还原版。
+        return nil
+    end
+
+    if state.suppressRawShootInput then
+        return 0
+    end
+    if state.active then
+        return getShootOutput(state, buttonAction)
+    end
+    if state.releaseReason == "chargeFamiliarReleased" and
+        state.rawMagnitude < Config.EnterDeadzone then
+        return 0
+    end
+    return nil
 end
 
 function mod:OnInputAction(entity, inputHook, buttonAction)
@@ -1185,42 +1518,33 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
 
     local state = getControllerState(controllerIndex)
 
-    if SHOOT_ACTIONS[buttonAction] and hasEyeOfTheOccultPassThrough(player) then
-        clearShootFilterState(controllerIndex)
-        return nil
-    end
+    if MOVE_ACTIONS[buttonAction] then
+        if inputHook == InputHook.IS_ACTION_TRIGGERED or isActionPressedHook(inputHook) then
+            local suppressMarsAnalog =
+                inputHook == InputHook.IS_ACTION_TRIGGERED and Config.MarsSuppressAnalogTriggered
+            if isActionPressedHook(inputHook) then
+                suppressMarsAnalog = Config.MarsSuppressAnalogPressed
+            end
 
-    if inputHook == InputHook.IS_ACTION_TRIGGERED or isActionPressedHook(inputHook) then
-        local suppressMarsAnalog = inputHook == InputHook.IS_ACTION_TRIGGERED and Config.MarsSuppressAnalogTriggered
-        if isActionPressedHook(inputHook) then
-            suppressMarsAnalog = Config.MarsSuppressAnalogPressed
-        end
-
-        if suppressMarsAnalog and MOVE_ACTIONS[buttonAction] and hasMarsAnalogGuard(player) and
-            shouldSuppressMarsAnalogInput(state, controllerIndex, buttonAction) then
-            appendDiagnosticLog(
-                "mars analog suppressed controller=" .. tostring(controllerIndex) ..
-                " action=" .. tostring(buttonAction) ..
-                " hook=" .. tostring(inputHook)
-            )
-            return false
-        end
-
-        if SHOOT_ACTIONS[buttonAction] and
-            (state.releaseReason == "chargeFamiliarReleased" or shouldUseChargeFamiliarReleasePath(player)) then
-            refreshControllerState(state, controllerIndex, player)
-            if state.releaseReason == "chargeFamiliarReleased" and
-                state.rawMagnitude < Config.EnterDeadzone then
+            if suppressMarsAnalog and hasMarsAnalogGuard(player) and
+                shouldSuppressMarsAnalogInput(state, controllerIndex, buttonAction) then
+                appendDiagnosticLog(
+                    "mars analog suppressed controller=" .. tostring(controllerIndex) ..
+                    " action=" .. tostring(buttonAction) ..
+                    " hook=" .. tostring(inputHook)
+                )
                 return false
             end
+            return nil
         end
-        return nil
-    end
-
-    if MOVE_ACTIONS[buttonAction] then
         if hasMarsAnalogGuard(player) then
             return getMarsAnalogGuardValue(state, controllerIndex, buttonAction)
         end
+        return nil
+    end
+
+    if hasEyeOfTheOccultPassThrough(player) then
+        clearShootFilterState(controllerIndex)
         return nil
     end
 
@@ -1230,29 +1554,10 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
     end
 
     refreshControllerState(state, controllerIndex, player)
-
-    if not state.active then
-        if state.releaseReason == "chargeFamiliarReleased" and
-            state.rawMagnitude < Config.EnterDeadzone then
-            return 0
-        end
-        if state.rawMagnitude > 0.01 and state.rawMagnitude < Config.ExitDeadzone then
-            return 0
-        end
-        return nil
+    if state.taintedMode then
+        return handleTaintedAzazelShootInput(state, inputHook, buttonAction)
     end
-
-    if buttonAction == ButtonAction.ACTION_SHOOTLEFT then
-        return state.outLeft
-    elseif buttonAction == ButtonAction.ACTION_SHOOTRIGHT then
-        return state.outRight
-    elseif buttonAction == ButtonAction.ACTION_SHOOTUP then
-        return state.outUp
-    elseif buttonAction == ButtonAction.ACTION_SHOOTDOWN then
-        return state.outDown
-    end
-
-    return nil
+    return handleGenericShootInput(state, inputHook, buttonAction)
 end
 
 -- ============================================================

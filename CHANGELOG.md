@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+- Remove the 45-frame virtual Brimstone hold that delayed ordinary Azazel's
+  attack after the player returned the stick to center.
+- Leave ordinary Brimstone `triggered` and `pressed` states to the base game;
+  filter only direction values and a two-frame input dropout.
+- Update Tainted Azazel's held direction every frame while keeping exactly one
+  initial sneeze trigger.
+- Preserve live Analog Stick 360-degree turning during Tainted Azazel charge.
+- Replace tests that encoded delayed release and locked aim with release,
+  turning, snapback, and no-retrigger regression tests.
+
 ## 1.5.1
 
 - Republish the stable 1.3.2 runtime behavior as a forward update so Steam and
