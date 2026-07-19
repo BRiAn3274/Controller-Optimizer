@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.1
+
+- Republish the stable 1.3.2 runtime behavior as a forward update so Steam and
+  Isaac replace installations that received 1.5.0.
+- No gameplay behavior changes from 1.3.2.
+
 ## 1.5.0
 
 - Restore a native trigger/hold/release input sequence for Tainted Azazel in
