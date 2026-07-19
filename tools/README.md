@@ -2,7 +2,8 @@
 
 `upload_workshop.sh` updates Workshop item `3731198516` for app `250900`.
 It stages only the three runtime files, so Git metadata, tests, and tools are
-never included in the Workshop package.
+never included in the Workshop package. The Workshop title and public
+description are synchronized from `metadata.xml` on every upload.
 
 ## One-time setup
 

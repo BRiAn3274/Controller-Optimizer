@@ -90,8 +90,12 @@ done
 METADATA_VERSION="$(sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' metadata.xml | head -1)"
 MAIN_VERSION="$(sed -n 's/^local VERSION = "\([^"]*\)".*/\1/p' main.lua | head -1)"
 METADATA_ID="$(sed -n 's:.*<id>\([^<]*\)</id>.*:\1:p' metadata.xml | head -1)"
+METADATA_TITLE="$(sed -n 's:.*<name>\([^<]*\)</name>.*:\1:p' metadata.xml | head -1)"
+METADATA_DESCRIPTION="$(sed -n '/<description>/,/<\/description>/p' metadata.xml | sed '1s:.*<description>::; $s:</description>.*::')"
 
 [[ -n "$METADATA_VERSION" ]] || fail "could not read metadata.xml version"
+[[ -n "$METADATA_TITLE" ]] || fail "could not read metadata.xml name"
+[[ -n "$METADATA_DESCRIPTION" ]] || fail "could not read metadata.xml description"
 [[ "$METADATA_VERSION" == "$MAIN_VERSION" ]] ||
     fail "version mismatch: main.lua=$MAIN_VERSION metadata.xml=$METADATA_VERSION"
 [[ "$METADATA_ID" == "$PUBLISHED_FILE_ID" ]] ||
@@ -166,12 +170,14 @@ mkdir -p "$CONTENT_DIR"
 cp main.lua metadata.xml ControllerOptimizer_cover.png "$CONTENT_DIR/"
 
 vdf_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    printf '%s' "$1" | perl -0pe 's/\\/\\\\/g; s/"/\\"/g; s/\r//g; s/\n/\\n/g'
 }
 
 CONTENT_VDF="$(vdf_escape "$CONTENT_DIR")"
 PREVIEW_VDF="$(vdf_escape "$CONTENT_DIR/ControllerOptimizer_cover.png")"
 NOTE_VDF="$(vdf_escape "$CHANGE_NOTE")"
+TITLE_VDF="$(vdf_escape "$METADATA_TITLE")"
+DESCRIPTION_VDF="$(vdf_escape "$METADATA_DESCRIPTION")"
 
 cat > "$VDF_FILE" <<EOF
 "workshopitem"
@@ -180,6 +186,8 @@ cat > "$VDF_FILE" <<EOF
     "publishedfileid"    "$PUBLISHED_FILE_ID"
     "contentfolder"      "$CONTENT_VDF"
     "previewfile"        "$PREVIEW_VDF"
+    "title"              "$TITLE_VDF"
+    "description"        "$DESCRIPTION_VDF"
     "changenote"         "$NOTE_VDF"
 }
 EOF
@@ -188,6 +196,7 @@ printf 'Version:        %s\n' "$METADATA_VERSION"
 printf 'Workshop item:  %s\n' "$PUBLISHED_FILE_ID"
 printf 'SteamCMD:       %s\n' "$STEAMCMD_BIN"
 printf 'Change note:    %s\n' "$CHANGE_NOTE"
+printf 'Page metadata:  title and description from metadata.xml\n'
 printf 'Package files:\n'
 find "$CONTENT_DIR" -maxdepth 1 -type f -print | sed 's#^.*/#  - #'
 

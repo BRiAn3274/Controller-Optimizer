@@ -9,7 +9,7 @@ This is a controller-focused input-feel mod, mainly intended to improve the unst
 
 [h2]Main Features[/h2]
 
-[b]Brimstone direction hold[/b]
+[b]Brimstone input stabilization[/b]
 
 When using the right stick to control Brimstone, stick recentering, snapback, or slight drift may cause the beam to stop early, fire in the wrong direction, or fail to fire fully.
 
@@ -29,12 +29,42 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [h2]Current Version[/h2]
 
-1.6.0 removes the long virtual hold that delayed Azazel's Brimstone release.
-Tainted Azazel now produces one native sneeze trigger, follows live stick
-direction while charging, and releases after only a short input-dropout debounce.
-Analog Stick keeps full 360-degree aiming without locking the initial direction.
-Sudden near-opposite stick spikes require brief confirmation so snapback cannot
-reverse the final beam direction.
+[h2]Version 1.6.0 - Repentance+ controller input rework[/h2]
+
+[b]Azazel release behavior[/b]
+
+[list]
+[*]Removed the old 45-frame virtual direction hold that could keep Brimstone charging after the player returned the stick to center.
+[*]Ordinary Azazel now leaves the game's triggered and pressed/released states native. The mod only stabilizes direction values and covers a two-frame input dropout.
+[*]Full-charge attacks release promptly while retaining protection against brief controller sampling loss.
+[/list]
+
+[b]Tainted Azazel attack sequence[/b]
+
+[list]
+[*]A new stick attack creates exactly one native shoot trigger for Hemoptysis.
+[*]Holding the stick continues the native charge without spawning attacks from Lua.
+[*]The held direction is updated every frame, so the follow-up Brimstone can turn normally while charging.
+[*]Returning the stick to center releases promptly and rearms the next cough only after a stable center input.
+[/list]
+
+[b]Snapback and direction accuracy[/b]
+
+[list]
+[*]Smooth turns remain immediate.
+[*]A sudden near-180-degree input spike must remain stable briefly before it is accepted as an intentional turn.
+[*]This prevents no-center stick snapback from reversing the final beam while still allowing a deliberate held 180-degree turn.
+[/list]
+
+[b]Analog Stick compatibility[/b]
+
+When the Analog Stick item is held, the mod preserves the complete normalized 360-degree vector during the entire charge. The initial aim is no longer locked, and turning does not generate another Hemoptysis trigger.
+
+[b]Compatibility principles[/b]
+
+The mod does not directly create Hemoptysis, Brimstone lasers, damage, or charge completion. Those remain controlled by the game. The existing familiar release compatibility path, Mars analog guard, and Schoolbag quick swap are preserved.
+
+Version 1.6.0 was tested in Repentance+ on Steam Deck with ordinary Azazel and Tainted Azazel, with and without familiars.
 
 [h2]Notes[/h2]
 
