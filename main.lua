@@ -34,6 +34,7 @@ local Config = {
     -- 忽略摇杆回弹造成的短暂、较弱反向尖峰。
     ReverseGuardFrames = 5,
     ReverseGuardDot = -0.35,
+    AbruptReverseConfirmFrames = 2,
 
     -- 普通 Brimstone 使用数字方向；Analog Stick 会自动切换为 360° 模拟输出。
     DigitalOutput = true,
@@ -178,6 +179,7 @@ end
 
 local function sanitizeConfig()
     Config.ShootReleaseDebounceFrames = clampInteger(Config.ShootReleaseDebounceFrames, 0, 5, 2)
+    Config.AbruptReverseConfirmFrames = clampInteger(Config.AbruptReverseConfirmFrames, 1, 5, 2)
     Config.TaintedAzazelConfirmFrames = clampInteger(Config.TaintedAzazelConfirmFrames, 0, 5, 1)
     Config.TaintedAzazelConfirmMagnitude = clampNumber(Config.TaintedAzazelConfirmMagnitude, 0.35, 1, 0.65)
     Config.TaintedAzazelReleaseDebounceFrames = clampInteger(Config.TaintedAzazelReleaseDebounceFrames, 0, 5, 2)
@@ -667,6 +669,9 @@ local function getControllerState(controllerIndex)
             triggerFrame = -9999,
             suppressRawShootInput = false,
             releaseStartFrame = nil,
+            reverseCandidateFrame = nil,
+            reverseCandidateX = 0,
+            reverseCandidateY = 0,
             lastSnapbackLogFrame = -9999,
             releaseReason = "none",
             mars = {
@@ -729,6 +734,9 @@ local function resetShootState(state)
     state.triggerFrame = -9999
     state.suppressRawShootInput = false
     state.releaseStartFrame = nil
+    state.reverseCandidateFrame = nil
+    state.reverseCandidateX = 0
+    state.reverseCandidateY = 0
     state.lastSnapbackLogFrame = -9999
     state.releaseReason = "none"
 end
@@ -818,6 +826,36 @@ local function updateOutputs(state)
     state.outRight = clamp01(x)
     state.outUp = clamp01(-y)
     state.outDown = clamp01(y)
+end
+
+local function clearReverseCandidate(state)
+    state.reverseCandidateFrame = nil
+    state.reverseCandidateX = 0
+    state.reverseCandidateY = 0
+end
+
+-- 平滑转向每帧与上一方向夹角很小，立即接受。只有没有中心采样的突发
+-- 大角度反转需要连续存在数帧；这样既过滤回弹，也不锁住正常绕圈转向。
+local function shouldAcceptLiveDirection(state, x, y, frame)
+    local dot = (x * state.x) + (y * state.y)
+    if dot > Config.ReverseGuardDot then
+        clearReverseCandidate(state)
+        return true
+    end
+
+    local candidateDot =
+        (x * state.reverseCandidateX) + (y * state.reverseCandidateY)
+    if state.reverseCandidateFrame == nil or candidateDot < 0.80 then
+        state.reverseCandidateFrame = frame
+    end
+    state.reverseCandidateX = x
+    state.reverseCandidateY = y
+
+    if frame - state.reverseCandidateFrame >= Config.AbruptReverseConfirmFrames then
+        clearReverseCandidate(state)
+        return true
+    end
+    return false
 end
 
 -- ============================================================
@@ -1131,6 +1169,7 @@ local function finishShootRelease(state, reason, suppressRaw)
     state.x = 0
     state.y = 0
     state.releaseStartFrame = nil
+    clearReverseCandidate(state)
     state.triggerFrame = -9999
     state.suppressRawShootInput = suppressRaw == true
     state.releaseReason = reason
@@ -1166,7 +1205,20 @@ local function refreshGenericBrimstoneState(state, controllerIndex, player)
             releaseAge <= Config.ReverseGuardFrames and
             dot <= Config.ReverseGuardDot
 
-        if not springBackSpike then
+        if springBackSpike then
+            -- 只有已经经过中心的短反向尖峰才作为 snapback。保持该帧为
+            -- 释放态；若反向输入持续，下一帧会作为新的原生攻击交还游戏。
+            if releaseAge >= Config.ShootReleaseDebounceFrames then
+                finishShootRelease(state, "snapbackReleased", true)
+            elseif frame - state.lastSnapbackLogFrame > Config.ReverseGuardFrames then
+                state.lastSnapbackLogFrame = frame
+                appendDiagnosticLog(
+                    "snapback rejected controller=" .. tostring(controllerIndex) ..
+                    " raw=" .. string.format("%.3f,%.3f", rawX, rawY) ..
+                    " dot=" .. string.format("%.3f", dot)
+                )
+            end
+        elseif shouldAcceptLiveDirection(state, x, y, frame) then
             local previousOutputDir = state.outputDir
             state.x = x
             state.y = y
@@ -1184,23 +1236,14 @@ local function refreshGenericBrimstoneState(state, controllerIndex, player)
                 )
             end
         else
-            -- 只有已经经过中心的短反向尖峰才作为 snapback。保持该帧为
-            -- 释放态；若反向输入持续，下一帧会作为新的原生攻击交还游戏。
-            if releaseAge >= Config.ShootReleaseDebounceFrames then
-                finishShootRelease(state, "snapbackReleased", true)
-            elseif frame - state.lastSnapbackLogFrame > Config.ReverseGuardFrames then
-                state.lastSnapbackLogFrame = frame
-                appendDiagnosticLog(
-                    "snapback rejected controller=" .. tostring(controllerIndex) ..
-                    " raw=" .. string.format("%.3f,%.3f", rawX, rawY) ..
-                    " dot=" .. string.format("%.3f", dot)
-                )
-            end
+            state.lastActiveFrame = frame
+            state.releaseReason = "abruptReverseConfirming"
         end
     elseif state.active and
         (magnitude < Config.ExitDeadzone or state.releaseStartFrame ~= nil) then
         if state.releaseStartFrame == nil then
             state.releaseStartFrame = frame
+            clearReverseCandidate(state)
             appendDiagnosticLog(
                 "release pending controller=" .. tostring(controllerIndex) ..
                 " rawMagnitude=" .. string.format("%.3f", magnitude) ..
@@ -1282,7 +1325,7 @@ local function refreshTaintedAzazelState(state, controllerIndex, player)
                     state.taintedCenterStartFrame = nil
                     finishShootRelease(state, "taintedReleasedAfterSnapback", true)
                 end
-            else
+            elseif shouldAcceptLiveDirection(state, x, y, frame) then
                 -- 持续推动期间每帧更新方向。这里只改变 value/pressed 的方向，
                 -- triggerFrame 不变，因此转向不会再次咳血。
                 state.x = x
@@ -1291,10 +1334,14 @@ local function refreshTaintedAzazelState(state, controllerIndex, player)
                 state.lastActiveFrame = frame
                 state.releaseReason = "taintedCharging"
                 updateOutputs(state)
+            else
+                state.lastActiveFrame = frame
+                state.releaseReason = "taintedAbruptReverseConfirming"
             end
         elseif magnitude < Config.ExitDeadzone or state.releaseStartFrame ~= nil then
             if state.releaseStartFrame == nil then
                 state.releaseStartFrame = frame
+                clearReverseCandidate(state)
                 state.releaseReason = "taintedReleasePending"
                 appendDiagnosticLog(
                     "tainted release pending controller=" .. tostring(controllerIndex) ..

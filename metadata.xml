@@ -33,6 +33,8 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 Tainted Azazel now produces one native sneeze trigger, follows live stick
 direction while charging, and releases after only a short input-dropout debounce.
 Analog Stick keeps full 360-degree aiming without locking the initial direction.
+Sudden near-opposite stick spikes require brief confirmation so snapback cannot
+reverse the final beam direction.
 
 [h2]Notes[/h2]
 

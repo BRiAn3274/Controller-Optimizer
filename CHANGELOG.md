@@ -9,6 +9,8 @@
 - Update Tainted Azazel's held direction every frame while keeping exactly one
   initial sneeze trigger.
 - Preserve live Analog Stick 360-degree turning during Tainted Azazel charge.
+- Confirm abrupt near-180-degree direction jumps before accepting them, preventing
+  no-center stick snapback from reversing the final beam direction.
 - Replace tests that encoded delayed release and locked aim with release,
   turning, snapback, and no-retrigger regression tests.
 

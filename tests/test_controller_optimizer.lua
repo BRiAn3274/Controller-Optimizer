@@ -221,6 +221,20 @@ frame = 24
 setStick(-1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 1, "sustained reverse accepted")
 
+-- 没有采样到中心的单帧反向跳变也必须视为回弹，不能覆盖发射方向。
+reset(30)
+setStick(1, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "direct snapback acquire")
+frame = 31
+setStick(-1, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "direct snapback keeps direction")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 0, "direct snapback reverse hidden")
+frame = 32
+setStick(0, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "direct snapback releases original direction")
+frame = 34
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "direct snapback returns control")
+
 -- 回中只允许两帧采样防抖；pressed 始终交还原版，不能制造 45 帧发射延迟。
 reset(40)
 setStick(1, 0)
@@ -388,8 +402,8 @@ assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0,
 assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTLEFT), false, "tainted analog turn has no sneeze")
 
 -- 持续蓄力绕完整一圈时保持实时向量，任何新方向都不能生成第二个 triggered。
-for degrees = 0, 350, 10 do
-    frame = 402 + degrees / 10
+for degrees = 130, 480, 10 do
+    frame = 402 + (degrees - 130) / 10
     local radians = math.rad(degrees)
     local expectedX = math.cos(radians)
     local expectedY = math.sin(radians)
@@ -409,6 +423,36 @@ for degrees = 0, 350, 10 do
     assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTUP), false, "tainted analog loop no up trigger")
     assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTDOWN), false, "tainted analog loop no down trigger")
 end
+
+-- 里阿撒泻勒直接出现单帧反向回弹时保持玩家原意；持续反向才接受为主动转向。
+reset(450)
+player.playerType = PlayerType.PLAYER_AZAZEL_B
+setStick(1, 0)
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), true, "tainted direct snapback acquire")
+frame = 451
+setStick(-1, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "tainted direct snapback keeps intent")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 0, "tainted direct snapback hides reverse")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTLEFT), false, "tainted direct snapback no sneeze")
+frame = 452
+setStick(0, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "tainted direct snapback releases intended direction")
+
+reset(460)
+player.playerType = PlayerType.PLAYER_AZAZEL_B
+setStick(1, 0)
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), true, "tainted abrupt turn acquire")
+for confirmingFrame = 461, 462 do
+    frame = confirmingFrame
+    setStick(-1, 0)
+    assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "tainted abrupt turn confirming")
+    assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTLEFT), false, "tainted abrupt turn no sneeze")
+end
+frame = 463
+setStick(-1, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 1, "tainted sustained abrupt turn accepted")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "tainted sustained abrupt turn clears old direction")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTLEFT), false, "tainted accepted turn no sneeze")
 
 -- 普通 Repentance 不启用专用咳血触发重建，避免破坏原本正常的手柄行为。
 REPENTANCE_PLUS = false

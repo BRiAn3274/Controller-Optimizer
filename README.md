@@ -9,7 +9,8 @@ swap.
 
 Version 1.6.0 keeps ordinary Azazel's pressed/released state native, limits stick
 dropout filtering to two frames, and allows Tainted Azazel to turn while charging
-without generating another sneeze trigger.
+without generating another sneeze trigger. Smooth turns remain immediate, while
+sudden near-opposite spikes require brief confirmation to reject stick snapback.
 
 ## Development
 
