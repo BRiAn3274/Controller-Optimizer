@@ -94,6 +94,13 @@ for required in main.lua metadata.xml ControllerOptimizer_cover.png; do
     [[ -f "$ROOT_DIR/$required" ]] || fail "missing runtime file: $required"
 done
 
+PREVIEW_FILE="$ROOT_DIR/ControllerOptimizer_preview.jpg"
+[[ -f "$PREVIEW_FILE" ]] || fail "missing Workshop preview: ControllerOptimizer_preview.jpg"
+PREVIEW_BYTES="$(wc -c < "$PREVIEW_FILE" | tr -d '[:space:]')"
+[[ "$PREVIEW_BYTES" =~ ^[0-9]+$ ]] || fail "could not read Workshop preview size"
+[[ "$PREVIEW_BYTES" -lt 1048576 ]] ||
+    fail "Workshop preview must be under 1 MiB: $PREVIEW_FILE is $PREVIEW_BYTES bytes"
+
 METADATA_VERSION="$(sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' metadata.xml | head -1)"
 MAIN_VERSION="$(sed -n 's/^local VERSION = "\([^"]*\)".*/\1/p' main.lua | head -1)"
 METADATA_ID="$(sed -n 's:.*<id>\([^<]*\)</id>.*:\1:p' metadata.xml | head -1)"
@@ -179,7 +186,7 @@ vdf_escape() {
 }
 
 CONTENT_VDF="$(vdf_escape "$CONTENT_DIR")"
-PREVIEW_VDF="$(vdf_escape "$CONTENT_DIR/ControllerOptimizer_cover.png")"
+PREVIEW_VDF="$(vdf_escape "$PREVIEW_FILE")"
 NOTE_VDF="$(vdf_escape "$CHANGE_NOTE")"
 TITLE_VDF="$(vdf_escape "$METADATA_TITLE")"
 DESCRIPTION_VDF="$(vdf_escape "$METADATA_DESCRIPTION")"
@@ -226,6 +233,7 @@ printf 'Workshop item:  %s\n' "$PUBLISHED_FILE_ID"
 printf 'SteamCMD:       %s\n' "$STEAMCMD_BIN"
 printf 'Change note:    %s\n' "$CHANGE_NOTE"
 printf 'Page metadata:  %s\n' "$PAGE_METADATA_STATUS"
+printf 'Preview image:  %s bytes (under 1 MiB)\n' "$PREVIEW_BYTES"
 printf 'Package files:\n'
 find "$CONTENT_DIR" -maxdepth 1 -type f -print | sed 's#^.*/#  - #'
 

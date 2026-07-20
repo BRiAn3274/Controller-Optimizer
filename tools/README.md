@@ -2,9 +2,11 @@
 
 `upload_workshop.sh` updates Workshop item `3731198516` for app `250900`.
 It stages only the three runtime files, so Git metadata, tests, and tools are
-never included in the Workshop package. By default, uploads preserve the
-existing Workshop title and public description; `metadata.xml` remains the
-downloaded mod metadata rather than the source of truth for the Workshop page.
+never included in the Workshop package. `ControllerOptimizer_preview.jpg` is a
+separate upload-only preview kept below Steam's 1 MiB limit; the full PNG remains
+inside the mod. By default, uploads preserve the existing Workshop title and
+public description; `metadata.xml` remains the downloaded mod metadata rather
+than the source of truth for the Workshop page.
 
 ## One-time setup
 
@@ -44,7 +46,8 @@ The uploader:
 2. validates the Workshop ID and version strings;
 3. checks Lua syntax and runs the simulation tests;
 4. stages only runtime files in a temporary directory;
-5. generates the SteamCMD VDF automatically;
+5. verifies that the upload-only preview is below 1 MiB and generates the
+   SteamCMD VDF automatically;
 6. preserves the existing Workshop title and description unless explicitly
    asked to synchronize them;
 7. uploads to the existing Workshop item;
