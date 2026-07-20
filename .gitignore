@@ -7,3 +7,6 @@
 
 # SteamCMD build files are generated in a temporary directory.
 workshop_build_item.vdf
+
+# Local AI task staging and temporary deployment credentials.
+.cache/ai/

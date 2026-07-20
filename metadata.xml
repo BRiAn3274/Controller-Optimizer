@@ -17,9 +17,9 @@ This mod tries to make Brimstone fire fully in the correct direction and reduce 
 
 [b]Schoolbag active item quick swap[/b]
 
-When holding Schoolbag, you can use a controller button to quickly swap between the two active item slots.
+This optional feature is enabled by default. While actually holding Schoolbag, you can use a controller button to quickly swap between two occupied active item slots. It can be disabled in Mod Config Menu.
 
-The default button is left-stick press. This feature works with D Infinity, but it also works with other two-active-item setups.
+The default button is right-stick press. This feature works with D Infinity, but it also works with other two-active-item setups.
 
 [b]Mars accidental trigger guard[/b]
 
@@ -29,7 +29,17 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [h2]Current Version[/h2]
 
-[h2]Version 1.6.0 - Repentance+ controller input rework[/h2]
+[h2]Version 1.7.0 - Input-only compatibility hardening[/h2]
+
+[b]Compatibility boundary[/b]
+
+[list]
+[*]Removed all code that inspected or changed player laser entities, lifetime, or shrink state.
+[*]The mod now affects attacks only by returning filtered input values while the game is reading them.
+[*]It never spawns Hemoptysis, Brimstone lasers, tears, damage, or charge completion.
+[*]Player input state is isolated per character so shared-controller characters cannot reset or retrigger each other.
+[*]Character state uses a stable engine identity so repeated Lua userdata wrappers cannot discard direction, release, or snapback history.
+[/list]
 
 [b]Azazel release behavior[/b]
 
@@ -62,9 +72,11 @@ When the Analog Stick item is held, the mod preserves the complete normalized 36
 
 [b]Compatibility principles[/b]
 
-The mod does not directly create Hemoptysis, Brimstone lasers, damage, or charge completion. Those remain controlled by the game. The existing familiar release compatibility path, Mars analog guard, and Schoolbag quick swap are preserved.
+The mod only filters input values. It does not directly create Hemoptysis, Brimstone lasers, damage, or charge completion, and it does not modify laser lifetime or attack entities. Those remain controlled by the game.
 
-Version 1.6.0 was tested in Repentance+ on Steam Deck with ordinary Azazel and Tainted Azazel, with and without familiars.
+Ordinary Brimstone keeps native pressed and triggered states. Familiar release compatibility is input-only and limited to the original Lil Brimstone and Lil Monstro. Unrelated and custom familiars are left untouched. Mars keeps native held movement state, and Schoolbag quick swap requires the real collectible, two occupied slots, and an unambiguous controller target.
+
+Version 1.7.0 includes automated controller-input, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior were verified on Steam Deck before release.
 
 [h2]Notes[/h2]
 
@@ -79,7 +91,7 @@ I will continue maintaining this mod, but updates will be less frequent than bef
 The original purpose of this mod is simply to improve the controller experience before the related Repentance+ issues are officially fixed.
 
 Hopefully, controller players will eventually be able to fire Brimstone smoothly with the analog stick even without this mod.</description>
-    <version>1.6.0</version>
+    <version>1.7.0</version>
     <visibility>Public</visibility>
     <tag id="Lua"/>
     <tag id="Tweaks"/>

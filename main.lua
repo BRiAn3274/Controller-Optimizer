@@ -1,13 +1,18 @@
-﻿local MOD_NAME = "Controller Optimizer"
-local VERSION = "1.6.0"
+local MOD_NAME = "Controller Optimizer"
+local VERSION = "1.7.0"
 local mod = RegisterMod(MOD_NAME, 1)
 local IS_REPENTANCE_PLUS = REPENTANCE_PLUS == true
+
+-- Isaac 的物理手柄编号与 Linux js0/XInput 的数组下标不同。
+-- 10 是左摇杆按下，11 是右肩键，13 才是右摇杆按下。
+local CONTROLLER_BUTTON_STICK_RIGHT = 13
 
 -- ============================================================
 -- 配置区
 -- ============================================================
--- 这些值是 mod 的主要行为边界。优先通过这里调参；MCM 只暴露
--- 对普通玩家最安全的开关和数值。
+-- 兼容性边界：本 mod 只改写游戏正在读取的输入值。它不生成攻击、
+-- 不修改激光实体，也不替玩家调用攻击 API。无法确认目标时必须返回 nil，
+-- 把输入完整交还游戏和其他 mod。
 local Config = {
     Enabled = true,
 
@@ -24,11 +29,9 @@ local Config = {
     -- 只掩盖极短的摇杆采样掉帧；稳定回中后立即把释放交还给游戏。
     -- 不能用长保持窗口，否则 Brimstone 会在玩家松手后继续蓄力。
     ShootReleaseDebounceFrames = 2,
-    -- 有跟随宝宝时沿用旧版兼容路径：优先释放输入，玩家本体激光只做短过渡保护。
+    -- 仅对原版蓄力跟班提前交还释放输入；不扫描或接管其他跟班。
     ChargeFamiliarCompatibility = true,
     ChargeFamiliarReleaseFrames = 0,
-    ChargeFamiliarLaserHoldFrames = 8,
-    ChargeFamiliarLaserCaptureFrames = 8,
     ChargeFamiliarCacheIntervalFrames = 5,
 
     -- 忽略摇杆回弹造成的短暂、较弱反向尖峰。
@@ -55,13 +58,12 @@ local Config = {
     MarsDigitalPressValue = 0.98,
     MarsReleaseValue = 0.08,
     MarsAnalogValueCap = 0.95,
-    MarsSuppressAnalogTriggered = true,
-    MarsSuppressAnalogPressed = true,
     MarsAnalogTriggerMemoryFrames = 10,
 
-    -- 独立书包切换：默认按下左摇杆，避开部分手柄上与攻击面键冲突的编号。
+    -- 书包切换只在真实持有 Schoolbag、两个主动槽都非空且目标角色唯一时执行。
+    -- 这些门槛已足以避免误操作，因此保留 1.6 的默认开启行为。
     ActiveSwapEnabled = true,
-    ActiveSwapControllerButton = 10,
+    ActiveSwapControllerButton = CONTROLLER_BUTTON_STICK_RIGHT,
 
     DiagnosticLogging = false,
     DiagnosticLogLimit = 120,
@@ -105,12 +107,12 @@ if ButtonAction ~= nil then
     end
 end
 
-local stateByController = {}
+local stateByPlayerKey = {}
 local activeSwapButtonStateByController = {}
-local chargeFamiliarByController = {}
+local chargeFamiliarByPlayerKey = {}
 local chargeFamiliarCacheFrame = -9999
-local chargeFamiliarLaserHoldByController = {}
 local samplingRawInput = false
+local lastRawInputErrorFrame = -9999
 local lastSkipLogFrameByKey = {}
 local modConfigMenuRegistered = false
 local FATAL_MESSAGE = "Controller Optimizer disabled: required input API is missing."
@@ -126,23 +128,36 @@ local function detectFatalError()
     fatalError =
         Input == nil or
         Input.GetActionValue == nil or
-        Input.IsButtonPressed == nil or
+        Isaac == nil or
+        Isaac.GetFrameCount == nil or
         InputHook == nil or
         InputHook.IS_ACTION_PRESSED == nil or
         InputHook.GET_ACTION_VALUE == nil or
         InputHook.IS_ACTION_TRIGGERED == nil or
         ModCallbacks == nil or
         ModCallbacks.MC_INPUT_ACTION == nil or
-        ModCallbacks.MC_POST_UPDATE == nil or
         ButtonAction == nil or
         ButtonAction.ACTION_SHOOTLEFT == nil or
         ButtonAction.ACTION_SHOOTRIGHT == nil or
         ButtonAction.ACTION_SHOOTUP == nil or
-        ButtonAction.ACTION_SHOOTDOWN == nil or
-        ButtonAction.ACTION_LEFT == nil or
-        ButtonAction.ACTION_RIGHT == nil or
-        ButtonAction.ACTION_UP == nil or
-        ButtonAction.ACTION_DOWN == nil
+        ButtonAction.ACTION_SHOOTDOWN == nil
+end
+
+local function getFrameCount()
+    if Isaac == nil or Isaac.GetFrameCount == nil then
+        return 0
+    end
+    local ok, value = pcall(Isaac.GetFrameCount)
+    if ok and type(value) == "number" then
+        return value
+    end
+    return 0
+end
+
+local function debugString(message)
+    if Isaac ~= nil and Isaac.DebugString ~= nil then
+        pcall(Isaac.DebugString, "[" .. MOD_NAME .. "] " .. tostring(message))
+    end
 end
 
 local function encodeBool(value)
@@ -178,17 +193,31 @@ local function clampInteger(value, minimum, maximum, defaultValue)
 end
 
 local function sanitizeConfig()
+    Config.EnterDeadzone = clampNumber(Config.EnterDeadzone, 0.15, 0.80, 0.35)
+    Config.ExitDeadzone = clampNumber(Config.ExitDeadzone, 0.05, Config.EnterDeadzone, 0.20)
     Config.ShootReleaseDebounceFrames = clampInteger(Config.ShootReleaseDebounceFrames, 0, 5, 2)
+    Config.ReverseGuardFrames = clampInteger(Config.ReverseGuardFrames, 0, 12, 5)
+    Config.ReverseGuardDot = clampNumber(Config.ReverseGuardDot, -1, 0.25, -0.35)
     Config.AbruptReverseConfirmFrames = clampInteger(Config.AbruptReverseConfirmFrames, 1, 5, 2)
+    Config.DirectionSwitchMargin = clampNumber(Config.DirectionSwitchMargin, 0, 0.75, 0.22)
     Config.TaintedAzazelConfirmFrames = clampInteger(Config.TaintedAzazelConfirmFrames, 0, 5, 1)
     Config.TaintedAzazelConfirmMagnitude = clampNumber(Config.TaintedAzazelConfirmMagnitude, 0.35, 1, 0.65)
     Config.TaintedAzazelReleaseDebounceFrames = clampInteger(Config.TaintedAzazelReleaseDebounceFrames, 0, 5, 2)
     Config.TaintedAzazelRearmFrames = clampInteger(Config.TaintedAzazelRearmFrames, 1, 8, 2)
     Config.ChargeFamiliarReleaseFrames = clampInteger(Config.ChargeFamiliarReleaseFrames, 0, 15, 0)
-    Config.ChargeFamiliarLaserHoldFrames = clampInteger(Config.ChargeFamiliarLaserHoldFrames, 0, 30, 8)
-    Config.ChargeFamiliarLaserCaptureFrames = clampInteger(Config.ChargeFamiliarLaserCaptureFrames, 0, 30, 8)
     Config.ChargeFamiliarCacheIntervalFrames = clampInteger(Config.ChargeFamiliarCacheIntervalFrames, 1, 30, 5)
-    Config.ActiveSwapControllerButton = clampInteger(Config.ActiveSwapControllerButton, 0, 15, 10)
+    Config.MarsAnalogMidMin = clampNumber(Config.MarsAnalogMidMin, 0.01, 0.80, 0.12)
+    Config.MarsAnalogMidMax = clampNumber(Config.MarsAnalogMidMax, Config.MarsAnalogMidMin, 0.99, 0.92)
+    Config.MarsDigitalPressValue = clampNumber(Config.MarsDigitalPressValue, Config.MarsAnalogMidMax, 1, 0.98)
+    Config.MarsReleaseValue = clampNumber(Config.MarsReleaseValue, 0, Config.MarsAnalogMidMin, 0.08)
+    Config.MarsAnalogValueCap = clampNumber(Config.MarsAnalogValueCap, 0.50, 0.99, 0.95)
+    Config.MarsAnalogTriggerMemoryFrames = clampInteger(Config.MarsAnalogTriggerMemoryFrames, 0, 30, 10)
+    Config.ActiveSwapControllerButton = clampInteger(
+        Config.ActiveSwapControllerButton,
+        0,
+        15,
+        CONTROLLER_BUTTON_STICK_RIGHT
+    )
     Config.DiagnosticLogLimit = clampInteger(Config.DiagnosticLogLimit, 20, 300, 120)
 end
 
@@ -198,7 +227,7 @@ local function appendDiagnosticLog(message)
         return
     end
 
-    table.insert(diagnosticLog, tostring(Isaac.GetFrameCount()) .. ": " .. tostring(message))
+    table.insert(diagnosticLog, tostring(getFrameCount()) .. ": " .. tostring(message))
     while #diagnosticLog > Config.DiagnosticLogLimit do
         table.remove(diagnosticLog, 1)
     end
@@ -280,11 +309,11 @@ end
 
 -- 所有输入状态都是每局/每房间可重建的临时状态，不进入 SaveData。
 local function resetInputState()
-    stateByController = {}
+    stateByPlayerKey = {}
     activeSwapButtonStateByController = {}
-    chargeFamiliarByController = {}
+    chargeFamiliarByPlayerKey = {}
     chargeFamiliarCacheFrame = -9999
-    chargeFamiliarLaserHoldByController = {}
+    lastRawInputErrorFrame = -9999
     lastSkipLogFrameByKey = {}
 end
 
@@ -351,9 +380,10 @@ local function registerModConfigMenu()
                 saveSettings()
             end,
             Info = {
+                "Enabled by default, but only while the player actually holds Schoolbag.",
                 "Swaps primary and secondary active item slots.",
-                "Default button is left-stick press.",
-                "Works with any two active items, not only D Infinity.",
+                "Default button is right-stick press.",
+                "Only runs while this player actually holds Schoolbag.",
             },
         }
     )
@@ -403,7 +433,7 @@ local function registerModConfigMenu()
             end,
             Info = {
                 "Blocks common Mars accidental triggers from analog left-stick movement.",
-                "D-pad style movement remains pass-through.",
+                "Pressed state and D-pad style movement remain pass-through.",
             },
         }
     )
@@ -439,8 +469,8 @@ end
 
 local function setupModConfigMenu()
     local ok, err = pcall(registerModConfigMenu)
-    if not ok and Isaac ~= nil and Isaac.DebugString ~= nil then
-        Isaac.DebugString("[" .. MOD_NAME .. "] MCM registration failed: " .. tostring(err))
+    if not ok then
+        debugString("MCM registration failed: " .. tostring(err))
     end
 end
 
@@ -476,28 +506,104 @@ local function getAnalogStickId()
     return 465
 end
 
+local function getSchoolbagId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_SCHOOLBAG ~= nil then
+        return CollectibleType.COLLECTIBLE_SCHOOLBAG
+    end
+    return 534
+end
+
+local function playerHasCollectible(player, collectible)
+    return player ~= nil and
+        collectible ~= nil and
+        player.HasCollectible ~= nil and
+        player:HasCollectible(collectible)
+end
+
+-- MC_INPUT_ACTION 传入的 Entity/Player 是 Lua userdata wrapper。不能直接把
+-- wrapper 当作跨回调状态键：游戏可以为同一底层角色返回不同 wrapper，导致
+-- 方向、回中和反向确认状态被拆散。优先使用引擎的实体指针哈希；旧 API 环境
+-- 再退回 InitSeed，最后才使用手柄+角色类型或对象本身。
+local function getStablePlayerKey(player)
+    if player == nil then
+        return nil
+    end
+
+    if type(GetPtrHash) == "function" then
+        local hashOk, hash = pcall(GetPtrHash, player)
+        if hashOk and (type(hash) == "number" or type(hash) == "string") then
+            return "ptr:" .. tostring(hash)
+        end
+    end
+
+    if type(player.InitSeed) == "number" then
+        return "seed:" .. tostring(player.InitSeed)
+    end
+
+    local controllerIndex = player.ControllerIndex
+    local playerType = nil
+    if player.GetPlayerType ~= nil then
+        local typeOk, typeValue = pcall(player.GetPlayerType, player)
+        if typeOk and type(typeValue) == "number" then
+            playerType = typeValue
+        end
+    end
+    if type(controllerIndex) == "number" and playerType ~= nil then
+        return "controller:" .. tostring(controllerIndex) .. ":type:" .. tostring(playerType)
+    end
+
+    return player
+end
+
+-- 只识别游戏内已知需要蓄力后释放的两个原版跟班。自定义跟班默认放行，
+-- 避免仅因某个 mod 生成了 familiar 就改变玩家本体的射击输入。
+local function isChargeReleaseFamiliarVariant(variant)
+    if variant == nil then
+        return false
+    end
+
+    local lilBrimstone = FamiliarVariant ~= nil and FamiliarVariant.LIL_BRIMSTONE or 61
+    local lilMonstro = FamiliarVariant ~= nil and FamiliarVariant.LIL_MONSTRO or 108
+    return variant == lilBrimstone or variant == lilMonstro
+end
+
 local function refreshChargeFamiliarCache()
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     if frame - chargeFamiliarCacheFrame < Config.ChargeFamiliarCacheIntervalFrames then
         return
     end
 
     chargeFamiliarCacheFrame = frame
-    chargeFamiliarByController = {}
+    chargeFamiliarByPlayerKey = {}
     if not Config.Enabled or not Config.ChargeFamiliarCompatibility or
         Isaac == nil or Isaac.FindByType == nil or EntityType == nil or
         EntityType.ENTITY_FAMILIAR == nil then
         return
     end
 
-    local familiars = Isaac.FindByType(EntityType.ENTITY_FAMILIAR, -1, -1, false, false)
+    local ok, familiars = pcall(
+        Isaac.FindByType,
+        EntityType.ENTITY_FAMILIAR,
+        -1,
+        -1,
+        false,
+        false
+    )
+    if not ok or type(familiars) ~= "table" then
+        debugString("familiar scan failed: " .. tostring(familiars))
+        return
+    end
+
     for _, entity in ipairs(familiars) do
-        local familiar = entity ~= nil and entity.ToFamiliar ~= nil and entity:ToFamiliar() or nil
-        if familiar ~= nil then
-            local owner = familiar.Player
-            local controllerIndex = owner ~= nil and owner.ControllerIndex or nil
-            if controllerIndex ~= nil and controllerIndex > 0 then
-                chargeFamiliarByController[controllerIndex] = true
+        local familiar = nil
+        if entity ~= nil and entity.ToFamiliar ~= nil then
+            local castOk, castValue = pcall(entity.ToFamiliar, entity)
+            familiar = castOk and castValue or nil
+        end
+        if familiar ~= nil and isChargeReleaseFamiliarVariant(familiar.Variant) then
+            local ownerKey = getStablePlayerKey(familiar.Player)
+            if ownerKey ~= nil then
+                chargeFamiliarByPlayerKey[ownerKey] = true
             end
         end
     end
@@ -508,26 +614,31 @@ local function hasChargeReleaseFamiliar(player)
         return false
     end
 
-    local controllerIndex = player.ControllerIndex
-    return controllerIndex ~= nil and chargeFamiliarByController[controllerIndex] == true
+    local playerKey = getStablePlayerKey(player)
+    return playerKey ~= nil and chargeFamiliarByPlayerKey[playerKey] == true
 end
 
 -- ============================================================
 -- 书包快速切换
 -- ============================================================
--- 短按独立按钮时，只调用原版 SwapActiveItems，不改主动道具形态、
--- 充能或 VarData。
+-- 这是唯一会主动调用玩家方法的可选功能。为了不误改其他角色或 mod 的
+-- 双主动槽，只在明确持有 Schoolbag 时调用一次原版 SwapActiveItems。
 local function canSwapActiveItems(player)
     if player == nil or player.SwapActiveItems == nil or player.GetActiveItem == nil then
         return false
     end
 
-    local primarySlot = getPrimarySlot()
-    local secondarySlot = getSecondarySlot()
-    local primaryItem = player:GetActiveItem(primarySlot) or 0
-    local secondaryItem = player:GetActiveItem(secondarySlot) or 0
+    if not playerHasCollectible(player, getSchoolbagId()) then
+        return false
+    end
 
-    return primaryItem ~= 0 and secondaryItem ~= 0
+    local primaryOk, primaryItem = pcall(player.GetActiveItem, player, getPrimarySlot())
+    local secondaryOk, secondaryItem = pcall(player.GetActiveItem, player, getSecondarySlot())
+    if not primaryOk or not secondaryOk then
+        return false
+    end
+
+    return (primaryItem or 0) ~= 0 and (secondaryItem or 0) ~= 0
 end
 
 local function quickSwapActiveItems(player, controllerIndex)
@@ -536,35 +647,69 @@ local function quickSwapActiveItems(player, controllerIndex)
         return
     end
 
-    player:SwapActiveItems()
-    appendDiagnosticLog("active swap controller=" .. tostring(controllerIndex))
+    local ok, err = pcall(player.SwapActiveItems, player)
+    if ok then
+        appendDiagnosticLog("active swap controller=" .. tostring(controllerIndex))
+    else
+        debugString("active swap failed: " .. tostring(err))
+    end
 end
 
 -- 每帧轮询物理按钮编号；松开时执行一次普通书包切换。
 local function checkActiveSwapInput()
-    if not Config.Enabled then
+    if not Config.Enabled or not Config.ActiveSwapEnabled or
+        Input == nil or Input.IsButtonPressed == nil or type(Game) ~= "function" then
         return
     end
 
-    local game = Game()
+    local ok, game = pcall(Game)
+    if not ok or game == nil then
+        return
+    end
+
     local playerCount = 1
-    local seenControllers = {}
+    local playersByController = {}
     if game.GetNumPlayers ~= nil then
-        playerCount = game:GetNumPlayers()
+        local countOk, count = pcall(game.GetNumPlayers, game)
+        if countOk and type(count) == "number" and count >= 0 then
+            playerCount = math.floor(count)
+        end
     end
 
     for index = 0, playerCount - 1 do
         local player = nil
         if game.GetPlayer ~= nil then
-            player = game:GetPlayer(index)
-        elseif index == 0 then
-            player = Isaac.GetPlayer(0)
+            local playerOk, playerValue = pcall(game.GetPlayer, game, index)
+            player = playerOk and playerValue or nil
+        elseif index == 0 and Isaac ~= nil and Isaac.GetPlayer ~= nil then
+            local playerOk, playerValue = pcall(Isaac.GetPlayer, 0)
+            player = playerOk and playerValue or nil
         end
 
         local controllerIndex = player ~= nil and player.ControllerIndex or nil
-        if controllerIndex ~= nil and controllerIndex > 0 and not seenControllers[controllerIndex] then
-            seenControllers[controllerIndex] = true
-            local isDown = Input.IsButtonPressed(Config.ActiveSwapControllerButton, controllerIndex)
+        if type(controllerIndex) == "number" and controllerIndex > 0 and canSwapActiveItems(player) then
+            local candidates = playersByController[controllerIndex]
+            if candidates == nil then
+                candidates = {}
+                playersByController[controllerIndex] = candidates
+            end
+            table.insert(candidates, player)
+        end
+    end
+
+    for controllerIndex, candidates in pairs(playersByController) do
+        -- Jacob/Esau、Strawman 或 modded player 可能共享手柄。无法唯一确定
+        -- 目标时不执行交换，避免替错误角色操作物品。
+        if #candidates == 1 then
+            local player = candidates[1]
+            local pressedOk, isDown = pcall(
+                Input.IsButtonPressed,
+                Config.ActiveSwapControllerButton,
+                controllerIndex
+            )
+            if not pressedOk then
+                isDown = false
+            end
             local state = activeSwapButtonStateByController[controllerIndex]
             if state == nil then
                 state = {
@@ -577,9 +722,7 @@ local function checkActiveSwapInput()
                 state.down = true
                 appendDiagnosticLog("swap button down controller=" .. tostring(controllerIndex))
             elseif not isDown and state.down then
-                if Config.ActiveSwapEnabled then
-                    quickSwapActiveItems(player, controllerIndex)
-                end
+                quickSwapActiveItems(player, controllerIndex)
                 state.down = false
             end
         end
@@ -595,7 +738,7 @@ local function logSkip(reason, controllerIndex)
         return
     end
 
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     local key = reason .. ":" .. tostring(controllerIndex or "none")
     local lastFrame = lastSkipLogFrameByKey[key] or -9999
     if frame - lastFrame < 30 then
@@ -603,10 +746,9 @@ local function logSkip(reason, controllerIndex)
     end
 
     lastSkipLogFrameByKey[key] = frame
-    Isaac.DebugString(
+    debugString(
         string.format(
-            "[%s] skip: %s controller=%s",
-            MOD_NAME,
+            "skip: %s controller=%s",
             reason,
             tostring(controllerIndex)
         )
@@ -632,8 +774,8 @@ end
 -- ============================================================
 -- 右摇杆射击方向滤波状态
 -- ============================================================
--- 每个 controllerIndex 独立维护状态，避免多手柄或 Steam Deck +
--- 外接手柄时互相污染。
+-- 每个底层 player 实体独立维护状态；controllerIndex 只用于读取物理输入。
+-- 稳定实体键既隔离共享手柄角色，也能跨 userdata wrapper 保留方向与释放状态。
 local function clamp01(value)
     if value < 0 then
         return 0
@@ -644,8 +786,13 @@ local function clamp01(value)
     return value
 end
 
-local function getControllerState(controllerIndex)
-    local state = stateByController[controllerIndex]
+local function getPlayerState(player)
+    local playerKey = getStablePlayerKey(player)
+    if playerKey == nil then
+        return nil
+    end
+
+    local state = stateByPlayerKey[playerKey]
     if state == nil then
         state = {
             frame = -1,
@@ -708,7 +855,7 @@ local function getControllerState(controllerIndex)
                 },
             },
         }
-        stateByController[controllerIndex] = state
+        stateByPlayerKey[playerKey] = state
     end
     return state
 end
@@ -748,10 +895,17 @@ local function rawActionValue(action, controllerIndex)
     local ok, value = pcall(Input.GetActionValue, action, controllerIndex)
     samplingRawInput = false
     if not ok then
-        Isaac.DebugString("[" .. MOD_NAME .. "] Input.GetActionValue failed: " .. tostring(value))
+        local frame = getFrameCount()
+        if frame - lastRawInputErrorFrame >= 60 then
+            lastRawInputErrorFrame = frame
+            debugString("Input.GetActionValue failed: " .. tostring(value))
+        end
         return 0
     end
-    return value or 0
+    if type(value) ~= "number" or value ~= value then
+        return 0
+    end
+    return clampNumber(value, 0, 1, 0)
 end
 
 -- 把归一化后的摇杆方向转换成输出动作值。默认使用数字方向，
@@ -859,7 +1013,7 @@ local function shouldAcceptLiveDirection(state, x, y, frame)
 end
 
 -- ============================================================
--- 激光武器与角色判定
+-- 射击目标判定
 -- ============================================================
 -- 默认只接管 Brimstone 类武器，避免普通眼泪射击被方向保持逻辑影响。
 local function isBrimstoneFilterTarget(player)
@@ -871,13 +1025,16 @@ local function isBrimstoneFilterTarget(player)
         return false
     end
 
-    if PlayerType ~= nil and
+    if player.GetPlayerType ~= nil and
+        PlayerType ~= nil and
         PlayerType.PLAYER_AZAZEL_B ~= nil and
         player:GetPlayerType() == PlayerType.PLAYER_AZAZEL_B then
         return true
     end
 
-    if WeaponType and WeaponType.WEAPON_BRIMSTONE and player:HasWeaponType(WeaponType.WEAPON_BRIMSTONE) then
+    if player.HasWeaponType ~= nil and
+        WeaponType ~= nil and WeaponType.WEAPON_BRIMSTONE ~= nil and
+        player:HasWeaponType(WeaponType.WEAPON_BRIMSTONE) then
         return true
     end
 
@@ -885,16 +1042,10 @@ local function isBrimstoneFilterTarget(player)
 end
 
 local function isTaintedAzazel(player)
-    return PlayerType ~= nil and
+    return player ~= nil and player.GetPlayerType ~= nil and
+        PlayerType ~= nil and
         PlayerType.PLAYER_AZAZEL_B ~= nil and
         player:GetPlayerType() == PlayerType.PLAYER_AZAZEL_B
-end
-
-local function playerHasCollectible(player, collectible)
-    return player ~= nil and
-        collectible ~= nil and
-        player.HasCollectible ~= nil and
-        player:HasCollectible(collectible)
 end
 
 local function hasEyeOfTheOccultPassThrough(player)
@@ -914,8 +1065,9 @@ local function shouldFilterShootInput(player)
     return isBrimstoneFilterTarget(player)
 end
 
-local function clearShootFilterState(controllerIndex)
-    local state = stateByController[controllerIndex]
+local function clearShootFilterState(player)
+    local playerKey = getStablePlayerKey(player)
+    local state = playerKey ~= nil and stateByPlayerKey[playerKey] or nil
     if state == nil then
         return
     end
@@ -931,105 +1083,12 @@ local function shouldUseChargeFamiliarReleasePath(player)
         shouldFilterShootInput(player)
 end
 
-local extendLaserTimeout
-
-local function startChargeFamiliarLaserHold(controllerIndex, player, state, frame, laser)
-    if Config.ChargeFamiliarLaserHoldFrames <= 0 or
-        controllerIndex == nil or player == nil or state == nil or
-        not shouldUseChargeFamiliarReleasePath(player) then
-        return
-    end
-
-    if state.x == 0 and state.y == 0 then
-        return
-    end
-
-    chargeFamiliarLaserHoldByController[controllerIndex] = {
-        player = player,
-        laser = laser,
-        endFrame = frame + Config.ChargeFamiliarLaserHoldFrames,
-        captureUntilFrame = frame + Config.ChargeFamiliarLaserCaptureFrames,
-    }
-
-    appendDiagnosticLog(
-        "charge familiar laser hold controller=" .. tostring(controllerIndex) ..
-        " laser=" .. tostring(laser ~= nil) ..
-        " holdFrames=" .. tostring(Config.ChargeFamiliarLaserHoldFrames)
-    )
-
-    if laser ~= nil and extendLaserTimeout ~= nil then
-        extendLaserTimeout(laser, Config.ChargeFamiliarLaserHoldFrames)
-    end
-end
-
-local function getActivePlayerLaser(player)
-    if player == nil then
-        return nil
-    end
-
-    if player.GetActiveWeaponEntity ~= nil then
-        local weapon = player:GetActiveWeaponEntity()
-        if weapon ~= nil and weapon.ToLaser ~= nil then
-            local laser = weapon:ToLaser()
-            if laser ~= nil then
-                return laser
-            end
-        end
-    end
-
-    return nil
-end
-
-extendLaserTimeout = function(laser, remainingFrames)
-    if laser == nil or remainingFrames <= 0 then
-        return false
-    end
-
-    local currentTimeout = laser.Timeout or 0
-    local targetTimeout = math.max(currentTimeout, remainingFrames)
-    if laser.Shrink ~= nil then
-        laser.Shrink = false
-    end
-    if laser.SetTimeout ~= nil then
-        laser:SetTimeout(targetTimeout)
-    else
-        laser.Timeout = targetTimeout
-    end
-    return true
-end
-
-local function updateChargeFamiliarLaserHolds()
-    if not Config.Enabled or not Config.ChargeFamiliarCompatibility then
-        chargeFamiliarLaserHoldByController = {}
-        return
-    end
-
-    local frame = Isaac.GetFrameCount()
-    for controllerIndex, hold in pairs(chargeFamiliarLaserHoldByController) do
-        if hold == nil or hold.endFrame == nil or frame > hold.endFrame then
-            chargeFamiliarLaserHoldByController[controllerIndex] = nil
-        else
-            local laser = hold.laser
-            if laser == nil or laser.Exists == nil or not laser:Exists() then
-                laser = getActivePlayerLaser(hold.player)
-                if laser ~= nil then
-                    hold.laser = laser
-                elseif hold.captureUntilFrame ~= nil and frame > hold.captureUntilFrame then
-                    chargeFamiliarLaserHoldByController[controllerIndex] = nil
-                end
-            end
-            if laser ~= nil then
-                extendLaserTimeout(laser, hold.endFrame - frame + 1)
-            end
-        end
-    end
-end
-
 -- ============================================================
 -- Mars 左摇杆误触防护
 -- ============================================================
 -- Mars 的双击移动触发会受到左摇杆线性行程影响。这里尝试识别
--- 模拟摇杆的中间值轨迹，并对对应方向的 triggered/pressed 做保护。
+-- 模拟摇杆的中间值轨迹，只抑制会启动冲刺的 triggered 边沿；pressed
+-- 始终返回 nil，避免影响依赖持续移动状态的其他 mod。
 local function hasMarsAnalogGuard(player)
     if not Config.MarsAnalogGuardEnabled or CollectibleType == nil then
         return false
@@ -1048,7 +1107,7 @@ end
 
 local function refreshMarsAnalogGuard(state, controllerIndex)
     local mars = state.mars
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     if mars.frame == frame then
         return
     end
@@ -1141,7 +1200,7 @@ local function shouldSuppressMarsAnalogInput(state, controllerIndex, buttonActio
     end
 
     local dirState = state.mars.dirs[direction]
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     return dirState ~= nil and
         (dirState.analogPress or dirState.sawAnalogMid or
             frame - dirState.lastAnalogFrame <= Config.MarsAnalogTriggerMemoryFrames)
@@ -1179,7 +1238,7 @@ end
 -- 普通 Brimstone/Azazel 只稳定方向值。triggered/pressed 仍由原版处理，
 -- 避免 Mod 把已经回中的摇杆继续伪装成“按住”而延迟发射。
 local function refreshGenericBrimstoneState(state, controllerIndex, player)
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     if state.frame == frame then
         return
     end
@@ -1253,8 +1312,8 @@ local function refreshGenericBrimstoneState(state, controllerIndex, player)
 
         if shouldUseChargeFamiliarReleasePath(player) and
             frame - state.lastActiveFrame > Config.ChargeFamiliarReleaseFrames then
-            local chargeFamiliarLaser = getActivePlayerLaser(player)
-            startChargeFamiliarLaserHold(controllerIndex, player, state, frame, chargeFamiliarLaser)
+            -- 只把摇杆回中转换成释放输入。激光寿命、伤害和实体状态完全
+            -- 由游戏处理，避免与修改 Brimstone 的其他 mod 竞争。
             finishShootRelease(state, "chargeFamiliarReleased", false)
             return
         end
@@ -1270,10 +1329,9 @@ local function refreshGenericBrimstoneState(state, controllerIndex, player)
     end
 
     if Config.Debug and frame % 15 == 0 then
-        Isaac.DebugString(
+        debugString(
             string.format(
-                "[%s] c=%d raw=(%.2f, %.2f) active=%s analog=%s last=%d age=%d out=(%.2f %.2f %.2f %.2f) reason=%s",
-                MOD_NAME,
+                "c=%d raw=(%.2f, %.2f) active=%s analog=%s last=%d age=%d out=(%.2f %.2f %.2f %.2f) reason=%s",
                 controllerIndex,
                 rawX,
                 rawY,
@@ -1295,7 +1353,7 @@ end
 -- pressed/value 继续蓄力。启动沿只生成一次，但蓄力方向必须实时跟随摇杆。
 -- 状态机只修复输入序列，游戏仍负责咳血、蓄力和 Brimstone 实体。
 local function refreshTaintedAzazelState(state, controllerIndex, player)
-    local frame = Isaac.GetFrameCount()
+    local frame = getFrameCount()
     if state.frame == frame then
         return
     end
@@ -1452,12 +1510,13 @@ end
 -- 这是所有输入接管的唯一入口。处理顺序有意保持为：
 -- 1. 快速放行不相关输入；
 -- 2. 处理 Mars 移动保护；
--- 3. 处理通用激光方向滤波。
+-- 3. 处理目标玩家的 Brimstone 输入滤波。
 local function getPlayerFromEntity(entity)
     if entity == nil or entity.ToPlayer == nil then
         return nil
     end
-    return entity:ToPlayer()
+    local ok, player = pcall(entity.ToPlayer, entity)
+    return ok and player or nil
 end
 
 local function getShootOutput(state, buttonAction)
@@ -1477,11 +1536,14 @@ local function handleTaintedAzazelShootInput(state, inputHook, buttonAction)
     local output = getShootOutput(state, buttonAction) or 0
     -- 里阿撒泻勒由“稳定回中后重新武装”自行界定手势边界；重新武装后
     -- 立即归还输入，不再叠加普通 Brimstone 的释放保护窗口。
+    -- 这里的 true/false 只是回答游戏本帧的输入查询，不调用任何攻击方法。
+    -- Analog Stick 的两个正交分量可在同一 triggerFrame 同时为 true，仍属于
+    -- 同一个摇杆手势，之后的转向不会更新 triggerFrame。
     local suppressInactive = state.suppressRawShootInput
 
     if inputHook == InputHook.IS_ACTION_TRIGGERED then
         if state.active then
-            return Isaac.GetFrameCount() == state.triggerFrame and output > 0.001
+            return getFrameCount() == state.triggerFrame and output > 0.001
         end
         if suppressInactive then
             return false
@@ -1558,22 +1620,20 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
     end
 
     local controllerIndex = player.ControllerIndex
-    if controllerIndex == nil or controllerIndex <= 0 then
+    if type(controllerIndex) ~= "number" or controllerIndex <= 0 then
         logSkip("invalid controllerIndex", controllerIndex)
         return nil
     end
 
-    local state = getControllerState(controllerIndex)
+    local state = getPlayerState(player)
+    if state == nil then
+        logSkip("no stable player state", controllerIndex)
+        return nil
+    end
 
     if MOVE_ACTIONS[buttonAction] then
-        if inputHook == InputHook.IS_ACTION_TRIGGERED or isActionPressedHook(inputHook) then
-            local suppressMarsAnalog =
-                inputHook == InputHook.IS_ACTION_TRIGGERED and Config.MarsSuppressAnalogTriggered
-            if isActionPressedHook(inputHook) then
-                suppressMarsAnalog = Config.MarsSuppressAnalogPressed
-            end
-
-            if suppressMarsAnalog and hasMarsAnalogGuard(player) and
+        if inputHook == InputHook.IS_ACTION_TRIGGERED then
+            if hasMarsAnalogGuard(player) and
                 shouldSuppressMarsAnalogInput(state, controllerIndex, buttonAction) then
                 appendDiagnosticLog(
                     "mars analog suppressed controller=" .. tostring(controllerIndex) ..
@@ -1584,18 +1644,17 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
             end
             return nil
         end
+        if isActionPressedHook(inputHook) then
+            return nil
+        end
         if hasMarsAnalogGuard(player) then
             return getMarsAnalogGuardValue(state, controllerIndex, buttonAction)
         end
         return nil
     end
 
-    if hasEyeOfTheOccultPassThrough(player) then
-        clearShootFilterState(controllerIndex)
-        return nil
-    end
-
     if not shouldFilterShootInput(player) then
+        clearShootFilterState(player)
         logSkip("no Brimstone filter target", player.ControllerIndex)
         return nil
     end
@@ -1624,12 +1683,11 @@ end
 
 function mod:OnPostUpdate()
     refreshChargeFamiliarCache()
-    updateChargeFamiliarLaserHolds()
     checkActiveSwapInput()
 end
 
 function mod:OnPostRender()
-    if fatalError and Isaac.RenderText ~= nil then
+    if fatalError and Isaac ~= nil and Isaac.RenderText ~= nil then
         Isaac.RenderText(FATAL_MESSAGE, 42, 42, 1, 1, 1, 1)
     end
 end
@@ -1657,13 +1715,16 @@ if not fatalError then
     addInputActionCallback(InputHook.GET_ACTION_VALUE)
     addInputActionCallback(InputHook.IS_ACTION_TRIGGERED)
     addInputActionCallback(InputHook.IS_ACTION_PRESSED)
-    mod:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, mod.OnNewRun)
-    mod:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, mod.OnNewRoom)
-    mod:AddCallback(ModCallbacks.MC_POST_UPDATE, mod.OnPostUpdate)
+    if ModCallbacks.MC_POST_GAME_STARTED ~= nil then
+        mod:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, mod.OnNewRun)
+    end
+    if ModCallbacks.MC_POST_NEW_ROOM ~= nil then
+        mod:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, mod.OnNewRoom)
+    end
+    if ModCallbacks.MC_POST_UPDATE ~= nil then
+        mod:AddCallback(ModCallbacks.MC_POST_UPDATE, mod.OnPostUpdate)
+    end
     if ModCallbacks.MC_PRE_GAME_EXIT ~= nil then
         mod:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, mod.OnPreGameExit)
     end
 end
-
-
-

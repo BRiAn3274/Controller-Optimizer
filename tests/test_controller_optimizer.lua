@@ -1,7 +1,9 @@
 local frame = 0
-local actionValues = {}
+local actionValuesByController = {}
+local buttonStatesByController = {}
 local worldFamiliars = {}
 local savedData = ""
+local nextPlayerSeed = 1000
 
 REPENTANCE_PLUS = true
 
@@ -35,6 +37,7 @@ CollectibleType = {
     COLLECTIBLE_ANALOG_STICK = 465,
     COLLECTIBLE_EYE_OF_THE_OCCULT = 572,
     COLLECTIBLE_MARS = 609,
+    COLLECTIBLE_SCHOOLBAG = 534,
 }
 
 FamiliarVariant = {
@@ -48,11 +51,13 @@ PlayerType = { PLAYER_AZAZEL_B = 23 }
 ActiveSlot = { SLOT_PRIMARY = 0, SLOT_SECONDARY = 1 }
 
 Input = {
-    GetActionValue = function(action)
-        return actionValues[action] or 0
+    GetActionValue = function(action, controllerIndex)
+        local values = actionValuesByController[controllerIndex] or {}
+        return values[action] or 0
     end,
-    IsButtonPressed = function()
-        return false
+    IsButtonPressed = function(button, controllerIndex)
+        local buttons = buttonStatesByController[controllerIndex] or {}
+        return buttons[button] == true
     end,
 }
 
@@ -71,11 +76,18 @@ Isaac = {
 }
 
 local player = {
+    InitSeed = 1000,
     ControllerIndex = 1,
     collectibles = {},
     brimstone = true,
     playerType = 0,
+    activeItems = { [0] = 0, [1] = 0 },
+    swapCount = 0,
 }
+
+GetPtrHash = function(entity)
+    return entity.InitSeed
+end
 
 function player:ToPlayer()
     return self
@@ -93,19 +105,22 @@ function player:HasCollectible(collectible)
     return self.collectibles[collectible] == true
 end
 
-function player:GetActiveItem()
-    return 0
+function player:GetActiveItem(slot)
+    return self.activeItems[slot] or 0
 end
 
-function player:SwapActiveItems() end
-function player:GetActiveWeaponEntity() return nil end
+function player:SwapActiveItems()
+    self.activeItems[0], self.activeItems[1] = self.activeItems[1], self.activeItems[0]
+    self.swapCount = self.swapCount + 1
+end
 
+local players = { player }
 local game = {
     GetNumPlayers = function()
-        return 1
+        return #players
     end,
-    GetPlayer = function()
-        return player
+    GetPlayer = function(_, index)
+        return players[index + 1]
     end,
 }
 
@@ -135,25 +150,67 @@ end
 
 dofile("main.lua")
 
-local function setStick(x, y)
-    actionValues[ButtonAction.ACTION_SHOOTLEFT] = math.max(-x, 0)
-    actionValues[ButtonAction.ACTION_SHOOTRIGHT] = math.max(x, 0)
-    actionValues[ButtonAction.ACTION_SHOOTUP] = math.max(-y, 0)
-    actionValues[ButtonAction.ACTION_SHOOTDOWN] = math.max(y, 0)
+local function setActionValue(action, value, controllerIndex)
+    controllerIndex = controllerIndex or player.ControllerIndex
+    local values = actionValuesByController[controllerIndex]
+    if values == nil then
+        values = {}
+        actionValuesByController[controllerIndex] = values
+    end
+    values[action] = value
+end
+
+local function setStick(x, y, controllerIndex)
+    setActionValue(ButtonAction.ACTION_SHOOTLEFT, math.max(-x, 0), controllerIndex)
+    setActionValue(ButtonAction.ACTION_SHOOTRIGHT, math.max(x, 0), controllerIndex)
+    setActionValue(ButtonAction.ACTION_SHOOTUP, math.max(-y, 0), controllerIndex)
+    setActionValue(ButtonAction.ACTION_SHOOTDOWN, math.max(y, 0), controllerIndex)
+end
+
+local function setButton(button, isDown, controllerIndex)
+    controllerIndex = controllerIndex or player.ControllerIndex
+    local buttons = buttonStatesByController[controllerIndex]
+    if buttons == nil then
+        buttons = {}
+        buttonStatesByController[controllerIndex] = buttons
+    end
+    buttons[button] = isDown
+end
+
+local function pollFor(targetPlayer, hook, action)
+    return registeredMod:OnInputAction(targetPlayer, hook, action)
 end
 
 local function poll(hook, action)
-    return registeredMod:OnInputAction(player, hook, action)
+    return pollFor(player, hook, action)
 end
 
 local function reset(atFrame)
     frame = atFrame
-    actionValues = {}
+    actionValuesByController = {}
+    buttonStatesByController = {}
     worldFamiliars = {}
+    players = { player }
     player.collectibles = {}
     player.brimstone = true
     player.playerType = 0
+    player.ControllerIndex = 1
+    player.activeItems = { [0] = 0, [1] = 0 }
+    player.swapCount = 0
     registeredMod:OnNewRoom()
+end
+
+local function makePlayer(controllerIndex)
+    nextPlayerSeed = nextPlayerSeed + 1
+    return setmetatable({
+        InitSeed = nextPlayerSeed,
+        ControllerIndex = controllerIndex,
+        collectibles = {},
+        brimstone = true,
+        playerType = 0,
+        activeItems = { [0] = 0, [1] = 0 },
+        swapCount = 0,
+    }, { __index = player })
 end
 
 local function assertEqual(actual, expected, label)
@@ -221,6 +278,40 @@ frame = 24
 setStick(-1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 1, "sustained reverse accepted")
 
+-- 游戏可能为同一底层角色返回新的 userdata wrapper。稳定实体键必须让方向、
+-- 回中防抖和反向保护跨 wrapper 延续，否则实机会退化成近似原生输入。
+reset(25)
+local wrapperEntity = {
+    ToPlayer = function()
+        return setmetatable({ InitSeed = player.InitSeed }, { __index = player })
+    end,
+}
+setStick(1, 0)
+assertEqual(
+    pollFor(wrapperEntity, InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT),
+    1,
+    "wrapper churn acquires direction"
+)
+frame = 26
+setStick(0, 0)
+assertEqual(
+    pollFor(wrapperEntity, InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT),
+    1,
+    "wrapper churn preserves release debounce"
+)
+frame = 27
+setStick(-1, 0)
+assertEqual(
+    pollFor(wrapperEntity, InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT),
+    1,
+    "wrapper churn preserves snapback intent"
+)
+assertEqual(
+    pollFor(wrapperEntity, InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT),
+    0,
+    "wrapper churn blocks reverse output"
+)
+
 -- 没有采样到中心的单帧反向跳变也必须视为回弹，不能覆盖发射方向。
 reset(30)
 setStick(1, 0)
@@ -262,7 +353,7 @@ player.brimstone = false
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "non-brimstone pass-through")
 
--- 保留原有行为：任何玩家跟班都会启用跟班兼容释放路径。
+-- 普通或 modded 跟班必须完全放行，不能改变玩家本体的释放窗口。
 reset(110)
 worldFamiliars = {
     { ToFamiliar = function(self) return self end, Variant = 1, Player = player },
@@ -273,7 +364,8 @@ setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "generic familiar acquire")
 frame = 112
 setStick(0, 0)
-assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "generic familiar releases")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "generic familiar keeps normal debounce")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "generic familiar pressed native")
 
 -- 真正的蓄力宝宝仍使用专用释放路径。
 reset(120)
@@ -287,6 +379,83 @@ assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1,
 frame = 122
 setStick(0, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "charge familiar releases")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), false, "charge familiar release edge")
+
+-- Mars 只拦截模拟轨迹产生的 triggered；持续 pressed 必须留给原版和其他 mod。
+reset(140)
+player.collectibles[CollectibleType.COLLECTIBLE_MARS] = true
+setActionValue(ButtonAction.ACTION_RIGHT, 0.5)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_RIGHT), nil, "mars observes analog mid")
+frame = 141
+setActionValue(ButtonAction.ACTION_RIGHT, 0.99)
+assertClose(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_RIGHT), 0.95, 0.0001, "mars caps analog peak")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_RIGHT), false, "mars suppresses analog trigger")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_RIGHT), nil, "mars pressed remains native")
+
+-- 书包快捷交换默认开启，但仍必须持有 Schoolbag 且目标角色唯一。
+reset(150)
+player.activeItems = { [0] = 100, [1] = 200 }
+setButton(13, true)
+registeredMod:OnPostUpdate()
+frame = 151
+setButton(13, false)
+registeredMod:OnPostUpdate()
+assertEqual(player.swapCount, 0, "active swap requires schoolbag")
+
+reset(160)
+player.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = true
+player.activeItems = { [0] = 100, [1] = 200 }
+-- Isaac 的编号 11 是 RB，不得把它误认成右摇杆按下。
+setButton(11, true)
+registeredMod:OnPostUpdate()
+frame = 161
+setButton(11, false)
+registeredMod:OnPostUpdate()
+assertEqual(player.swapCount, 0, "right bumper does not trigger schoolbag swap")
+
+frame = 162
+setButton(13, true)
+registeredMod:OnPostUpdate()
+frame = 163
+setButton(13, false)
+registeredMod:OnPostUpdate()
+assertEqual(player.swapCount, 1, "schoolbag swaps once on release")
+assertEqual(player.activeItems[0], 200, "schoolbag primary swapped")
+assertEqual(player.activeItems[1], 100, "schoolbag secondary swapped")
+
+reset(170)
+local sharedPlayer = makePlayer(1)
+player.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = true
+sharedPlayer.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = true
+player.activeItems = { [0] = 100, [1] = 200 }
+sharedPlayer.activeItems = { [0] = 300, [1] = 400 }
+players = { player, sharedPlayer }
+setButton(13, true)
+registeredMod:OnPostUpdate()
+frame = 171
+setButton(13, false)
+registeredMod:OnPostUpdate()
+assertEqual(player.swapCount, 0, "shared controller does not guess first player")
+assertEqual(sharedPlayer.swapCount, 0, "shared controller does not guess second player")
+
+-- 同一手柄控制多个角色时，每个 player 保持独立射击状态，不能互相重置配置。
+reset(180)
+local taintedSharedPlayer = makePlayer(1)
+taintedSharedPlayer.playerType = PlayerType.PLAYER_AZAZEL_B
+setStick(1, 0)
+assertEqual(
+    pollFor(taintedSharedPlayer, InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT),
+    true,
+    "shared controller tainted initial trigger"
+)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "shared controller generic output")
+frame = 181
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "shared generic remains active")
+assertEqual(
+    pollFor(taintedSharedPlayer, InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT),
+    false,
+    "shared profiles do not retrigger tainted attack"
+)
 
 -- 里阿撒泻勒：一次摇杆动作只产生一帧 triggered，后续只维持 pressed/value。
 reset(200)
@@ -454,6 +623,30 @@ assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTLEFT), 1, 
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "tainted sustained abrupt turn clears old direction")
 assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTLEFT), false, "tainted accepted turn no sneeze")
 
+-- 非玩家、无效手柄和无关动作一律返回 nil，不抢占其他输入处理器。
+assertEqual(registeredMod:OnInputAction(nil, InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "nil entity pass-through")
+player.ControllerIndex = 0
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "keyboard controller pass-through")
+player.ControllerIndex = 1
+assertEqual(registeredMod:OnInputAction(player, InputHook.GET_ACTION_VALUE, 999), nil, "unrelated action pass-through")
+
+-- 静态边界：运行时代码不得调用生成攻击或修改激光实体的 API。
+local sourceFile = assert(io.open("main.lua", "rb"))
+local source = sourceFile:read("*a")
+sourceFile:close()
+for _, forbidden in ipairs({
+    "FireBrimstone",
+    "FireDelayedBrimstone",
+    "GetActiveWeaponEntity",
+    "SetTimeout",
+    "AddBrimstoneBall",
+    "Isaac.Spawn",
+}) do
+    if string.find(source, forbidden, 1, true) ~= nil then
+        error("input-only boundary violated by API: " .. forbidden)
+    end
+end
+
 -- 普通 Repentance 不启用专用咳血触发重建，避免破坏原本正常的手柄行为。
 REPENTANCE_PLUS = false
 dofile("main.lua")
@@ -462,5 +655,19 @@ player.playerType = PlayerType.PLAYER_AZAZEL_B
 setStick(1, 0)
 assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), nil, "repentance keeps native trigger")
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "repentance keeps generic filter")
+
+-- 可选的移动、轮询和生命周期 API 缺失时，核心射击滤波仍应正常加载。
+REPENTANCE_PLUS = true
+Input.IsButtonPressed = nil
+Isaac.FindByType = nil
+ModCallbacks.MC_POST_UPDATE = nil
+ButtonAction.ACTION_LEFT = nil
+ButtonAction.ACTION_RIGHT = nil
+ButtonAction.ACTION_UP = nil
+ButtonAction.ACTION_DOWN = nil
+dofile("main.lua")
+reset(520)
+setStick(1, 0)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "optional APIs do not disable core")
 
 print("controller optimizer tests: ok")

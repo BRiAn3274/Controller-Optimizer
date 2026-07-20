@@ -2,8 +2,9 @@
 
 `upload_workshop.sh` updates Workshop item `3731198516` for app `250900`.
 It stages only the three runtime files, so Git metadata, tests, and tools are
-never included in the Workshop package. The Workshop title and public
-description are synchronized from `metadata.xml` on every upload.
+never included in the Workshop package. By default, uploads preserve the
+existing Workshop title and public description; `metadata.xml` remains the
+downloaded mod metadata rather than the source of truth for the Workshop page.
 
 ## One-time setup
 
@@ -31,8 +32,11 @@ Commit the release first, make sure `main.lua` and `metadata.xml` have the same
 version, then run:
 
 ```bash
-./tools/upload_workshop.sh --user your_account_name --note "Version 1.5.0"
+./tools/upload_workshop.sh --user your_account_name --note "Version 1.7.0"
 ```
+
+Only use `--sync-page-metadata` when deliberately replacing the Workshop title
+and description with the values from `metadata.xml`.
 
 The uploader:
 
@@ -41,8 +45,10 @@ The uploader:
 3. checks Lua syntax and runs the simulation tests;
 4. stages only runtime files in a temporary directory;
 5. generates the SteamCMD VDF automatically;
-6. uploads to the existing Workshop item;
-7. creates the annotated `v<version>` tag after a successful upload if needed.
+6. preserves the existing Workshop title and description unless explicitly
+   asked to synchronize them;
+7. uploads to the existing Workshop item;
+8. creates the annotated `v<version>` tag after a successful upload if needed.
 
 Use `--allow-dirty` only for deliberate test uploads. Use `--skip-tests` only
 when no compatible Lua interpreter is available.

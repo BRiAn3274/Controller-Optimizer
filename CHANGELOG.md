@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.7.0 - 2026-07-20
+
+- Remove all player-laser entity inspection and lifetime mutation. Familiar
+  compatibility now changes release input only.
+- Restrict the charge-familiar release path to the original Lil Brimstone and
+  Lil Monstro variants instead of every familiar owned by the player.
+- Isolate shooting state by player so characters sharing one controller cannot
+  reset or retrigger each other's input profile.
+- Use a stable engine player identity instead of a transient Lua userdata
+  wrapper so direction, release and snapback history survive every input hook.
+- Leave Mars `IS_ACTION_PRESSED` native and suppress only confirmed analog
+  `IS_ACTION_TRIGGERED` edges.
+- Keep Schoolbag quick swap enabled by default, but require the actual
+  Schoolbag collectible, two occupied slots, and an unambiguous controller
+  target. Use Isaac physical button 13 for right-stick press; button 11 is the
+  right bumper and must not trigger a swap.
+- Treat movement, physical-button polling, familiar scanning, and lifecycle
+  callbacks as optional APIs so their absence cannot disable core shoot filtering.
+- Validate raw input values and internal thresholds, rate-limit input-read errors,
+  and normalize `main.lua` to UTF-8 without BOM using LF line endings.
+- Add conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and
+  optional-API regression tests.
+
 ## 1.6.0
 
 - Remove the 45-frame virtual Brimstone hold that delayed ordinary Azazel's

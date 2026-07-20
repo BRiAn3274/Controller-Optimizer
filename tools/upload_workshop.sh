@@ -10,6 +10,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DRY_RUN=0
 ALLOW_DIRTY=0
 SKIP_TESTS=0
+SYNC_PAGE_METADATA=0
 STEAM_USER="${STEAM_USERNAME:-}"
 CHANGE_NOTE=""
 NOTE_FILE=""
@@ -25,6 +26,8 @@ Options:
   --dry-run         Validate and show the generated package without uploading
   --allow-dirty     Permit an upload from an uncommitted worktree
   --skip-tests      Skip the Lua simulation test
+  --sync-page-metadata
+                    Also replace the Workshop title and description from metadata.xml
   -h, --help        Show this help
 EOF
 }
@@ -63,6 +66,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_TESTS=1
             shift
             ;;
+        --sync-page-metadata)
+            SYNC_PAGE_METADATA=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -94,8 +101,6 @@ METADATA_TITLE="$(sed -n 's:.*<name>\([^<]*\)</name>.*:\1:p' metadata.xml | head
 METADATA_DESCRIPTION="$(sed -n '/<description>/,/<\/description>/p' metadata.xml | sed '1s:.*<description>::; $s:</description>.*::')"
 
 [[ -n "$METADATA_VERSION" ]] || fail "could not read metadata.xml version"
-[[ -n "$METADATA_TITLE" ]] || fail "could not read metadata.xml name"
-[[ -n "$METADATA_DESCRIPTION" ]] || fail "could not read metadata.xml description"
 [[ "$METADATA_VERSION" == "$MAIN_VERSION" ]] ||
     fail "version mismatch: main.lua=$MAIN_VERSION metadata.xml=$METADATA_VERSION"
 [[ "$METADATA_ID" == "$PUBLISHED_FILE_ID" ]] ||
@@ -179,7 +184,10 @@ NOTE_VDF="$(vdf_escape "$CHANGE_NOTE")"
 TITLE_VDF="$(vdf_escape "$METADATA_TITLE")"
 DESCRIPTION_VDF="$(vdf_escape "$METADATA_DESCRIPTION")"
 
-cat > "$VDF_FILE" <<EOF
+if [[ "$SYNC_PAGE_METADATA" -eq 1 ]]; then
+    [[ -n "$METADATA_TITLE" ]] || fail "could not read metadata.xml name"
+    [[ -n "$METADATA_DESCRIPTION" ]] || fail "could not read metadata.xml description"
+    cat > "$VDF_FILE" <<EOF
 "workshopitem"
 {
     "appid"              "$APP_ID"
@@ -191,12 +199,33 @@ cat > "$VDF_FILE" <<EOF
     "changenote"         "$NOTE_VDF"
 }
 EOF
+    PAGE_METADATA_STATUS="replace title and description from metadata.xml"
+else
+    # Valve updates only the VDF keys that are present. Omitting these fields is
+    # therefore the hard boundary that preserves hand-edited Workshop page text.
+    cat > "$VDF_FILE" <<EOF
+"workshopitem"
+{
+    "appid"              "$APP_ID"
+    "publishedfileid"    "$PUBLISHED_FILE_ID"
+    "contentfolder"      "$CONTENT_VDF"
+    "previewfile"        "$PREVIEW_VDF"
+    "changenote"         "$NOTE_VDF"
+}
+EOF
+    PAGE_METADATA_STATUS="preserve existing Workshop title and description"
+fi
+
+if [[ "$SYNC_PAGE_METADATA" -eq 0 ]] &&
+    grep -Eq '^[[:space:]]*"(title|description)"' "$VDF_FILE"; then
+    fail "preserve mode unexpectedly contains Workshop page metadata"
+fi
 
 printf 'Version:        %s\n' "$METADATA_VERSION"
 printf 'Workshop item:  %s\n' "$PUBLISHED_FILE_ID"
 printf 'SteamCMD:       %s\n' "$STEAMCMD_BIN"
 printf 'Change note:    %s\n' "$CHANGE_NOTE"
-printf 'Page metadata:  title and description from metadata.xml\n'
+printf 'Page metadata:  %s\n' "$PAGE_METADATA_STATUS"
 printf 'Package files:\n'
 find "$CONTENT_DIR" -maxdepth 1 -type f -print | sed 's#^.*/#  - #'
 
