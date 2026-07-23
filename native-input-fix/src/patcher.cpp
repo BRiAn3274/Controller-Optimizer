@@ -99,12 +99,14 @@ PatchState FindWinmmImport(std::vector<BYTE>& bytes, char*& importName) {
     return PatchState::Invalid;
 }
 
+#ifndef INIF_UNINSTALLER
 bool CopySibling(const std::wstring& sourceDirectory, const std::wstring& targetDirectory,
     const wchar_t* filename) {
     const std::wstring source = inif::Join(sourceDirectory, filename);
     const std::wstring target = inif::Join(targetDirectory, filename);
     return inif::FileExists(source) && CopyFileW(source.c_str(), target.c_str(), FALSE);
 }
+#endif
 
 std::wstring ChooseGameExecutable() {
     wchar_t path[32768]{};
@@ -146,6 +148,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 3;
     }
     const std::wstring gameDirectory = inif::DirectoryOf(executable);
+#ifdef INIF_UNINSTALLER
+    if (state != PatchState::AlreadyInstalled) {
+        Notify(L"The automatic loader is not installed in this executable.", MB_OK | MB_ICONINFORMATION);
+        return 0;
+    }
+    std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
+    if (!WriteFile(executable, bytes)) {
+        Notify(L"Could not restore isaac-ng.exe. Check permissions and confirm the game is closed.",
+            MB_OK | MB_ICONERROR);
+        return 4;
+    }
+    DeleteFileW(inif::Join(gameDirectory, L"cofix.dll").c_str());
+    DeleteFileW(inif::Join(gameDirectory, L"azazel_input_hook.dll").c_str());
+    Notify(L"Automatic loader removed. Steam will start Isaac without this input fix.", MB_OK | MB_ICONINFORMATION);
+    return 0;
+#else
     const std::wstring packageDirectory = inif::DirectoryOf(inif::ModulePath(nullptr));
     if (!CopySibling(packageDirectory, gameDirectory, L"cofix.dll") ||
         !CopySibling(packageDirectory, gameDirectory, L"azazel_input_hook.dll")) {
@@ -169,4 +187,5 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         : L"Automatic loader was already installed. The loader files were refreshed.",
         MB_OK | MB_ICONINFORMATION);
     return 0;
+#endif
 }

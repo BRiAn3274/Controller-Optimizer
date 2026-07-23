@@ -1,67 +1,47 @@
 # Isaac Native Input Fix
 
-Experimental Win32 input-filter framework for controller aiming in *The
-Binding of Isaac: Repentance+*. The intended scope is ordinary Azazel and
-Tainted Azazel in online play where Lua mods cannot be enabled.
+《以撒的结合：忏悔+》的原生手柄输入过滤实验。它独立于根目录的 Lua Workshop Mod，目标是在联机不能启用 Lua Mod 时，仍然只在本机过滤游戏读取到的射击输入。
 
-The project does **not** patch network packets, create attacks, modify attack
-entities, replace XInput, or overwrite game-root DLLs. It filters the local
-player's native action-query results before the game serializes normal online
-input.
+> 当前为预发布实验构建。自动加载安装器已完成 Windows x86 构建；Steam Deck 自动启动实机验证尚未完成，受控联机房主/客户端验证也尚未完成。
 
-## Current milestone
+## Windows 用户：安装一次，之后正常从 Steam 启动
 
-The experimental runtime has two narrowly scoped test profiles:
+发布包已包含静态链接的 Windows x86 程序，不需要额外安装 Visual C++ 运行库。
 
-- `IsaacInputPatcher.exe` installs a one-time automatic loader; subsequent
-  Steam launches load `azazel_input_hook.dll` without a separate injector;
-- the payload validates the PE32 game image and writes executable/hash/runtime
-  diagnostics;
-- the cross-platform C++ aim state machine covers ordinary and Tainted Azazel;
-- ordinary Azazel (`generic-test`) filters only native action values 4–7;
-- Tainted Azazel (`tainted-test`) additionally filters native pressed and
-  triggered action queries, emitting a single directional trigger after a
-  stable aim direction is confirmed.
+1. 解压完整 zip，保持 `IsaacInputPatcher.exe`、`cofix.dll` 和 `azazel_input_hook.dll` 在同一目录。
+2. 在 Steam 中完全关闭 Isaac。
+3. 双击 `IsaacInputPatcher.exe`，选择游戏目录中的 `isaac-ng.exe`。
+4. 安装器创建 `isaac-ng.exe.cofix-original` 备份，把 EXE 的 `WINMM.dll` 导入改为私有的 `cofix.dll`，并把 loader 文件复制到游戏目录。
+5. 此后直接从 Steam 启动游戏。`cofix.dll` 会原样转发 Isaac 所需的三个 WinMM 函数，并自动加载输入过滤 DLL。
 
-Both profiles are fail-closed: they patch only after matching the exact
-approved executable hash, unique bridge signatures, captured controller object,
-and expected method prologues. They do not identify player type at runtime, so
-choose the profile only for its corresponding character and treat both as local
-input experiments, not online-ready releases.
+安装器不覆盖汉化补丁已有的 `bootstp.dll`、`inject.dll` 或 `language_unlocker.dll`。
 
-`WinmmProxyProbe.exe` is retained only as a Proton proxy compatibility probe;
-the normal deployment path uses the injector and does not install `winmm.dll`.
+## 卸载
 
-Observed Steam Deck test target:
+完全关闭 Isaac 后运行 `IsaacInputUnpatcher.exe`，选择同一个 `isaac-ng.exe`。它只还原本项目的 WinMM 导入改动，并删除 `cofix.dll` 与 `azazel_input_hook.dll`。保留的 `.cofix-original` 备份可用于人工核对；Steam 的“验证游戏文件完整性”也可以恢复原始 EXE。
 
-- Repentance+ `1.9.7.17.J460`, Steam build `22878971`;
-- `isaac-ng.exe` PE32/i386;
-- executable SHA-256
-  `7122AC28779925B24E23E2416F231322B1470388BD25E2C08665AD8D53B3EA4F`;
-- Proton `9.0-203`.
+## 输入范围与安全边界
 
-This executable already contains a third-party `bootstp/inject` loader chain.
-The project treats those files as externally owned and never overwrites them.
+- 仅处理捕获到的本地输入对象和射击 action `4..7`。
+- 不修改网络包、联机协议、远端状态、XInput、攻击实体、伤害、激光生命周期或存档。
+- 只在已验证的 PE32/i386、输入 bridge 指纹和方法序言均匹配时安装主动 hook；否则写诊断并不改输入。
+- 当前已实测的目标：Repentance+ `1.9.7.17.J460`，Steam build `22878971`，Proton `9.0-203`。
 
-## Windows automatic installation
+## 配置与诊断
 
-Close Isaac, then run `IsaacInputPatcher.exe` from the complete package and
-select `isaac-ng.exe`. The patcher creates a backup, changes only Isaac's
-`WINMM.dll` import to the same-length private name `cofix.dll`, and copies
-`cofix.dll` plus `azazel_input_hook.dll` into the game directory. `cofix.dll`
-forwards the three WinMM APIs Isaac uses, then loads the payload on every normal
-Steam launch. It does not replace the Chinese patch's `bootstp.dll`, `inject.dll`,
-or `language_unlocker.dll`.
+配置和诊断位于：`%LOCALAPPDATA%\IsaacNativeInputFix\`。
 
-The automatic loader is intentionally experimental: the payload refuses
-unsupported game builds at initialization and controlled online host/client
-compatibility testing remains incomplete.
+- `config/generic-test.ini`：普通阿撒泻勒方向值测试。
+- `config/tainted-test.ini`：里阿撒泻勒触发/按住/方向测试。
+- `config/diagnostic.ini`：只收集兼容性诊断，不修改输入。
 
-See `DEPLOYMENT_WINDOWS.md` in the package for troubleshooting.
+当前正在将两种角色逻辑收敛为 DLL 内部的自动判断；在完成该验证前，不应把任意测试配置称为通用联机正式版。
 
-## Build
+`diagnostics.json` 中只有 `hook_status` 为 `generic-test-active` 或 `tainted-test-active`，且对应 hook 字段为 `true` 时，才表示运行时路径已实际启用。
 
-Visual Studio 2022 with the Win32 MSVC toolchain and CMake:
+## 开发
+
+Windows x86 目标必须使用 MSVC：
 
 ```powershell
 cmake -S . -B build -A Win32
@@ -70,42 +50,4 @@ ctest --test-dir build -C Release --output-on-failure
 cmake --build build --config Release --target package
 ```
 
-Every push also builds and tests the Win32 package with GitHub Actions. Core
-state-machine tests run on macOS/Linux without Windows headers.
-
-## Steam Deck diagnostic deployment
-
-Build/download the CI artifact, then from macOS run:
-
-```bash
-bash tools/deck-install.sh /path/to/IsaacNativeInputFix
-```
-
-The installer runs `WinmmProxyProbe.exe` inside the existing game Proton prefix
-and stages all files under `IsaacNativeInputFix`. It does not overwrite a game
-DLL. Start the game normally through Steam, then inject the diagnostic payload:
-
-```bash
-bash tools/deck-inject.sh
-```
-
-`config/generic-test.ini` enables the ordinary-Azazel value-only profile.
-`config/tainted-test.ini` enables the experimental Tainted-Azazel profile;
-it uses the same captured controller object and action IDs 4–7, while also
-overriding pressed/triggered semantics. Do not use either profile for another
-character, and do not use `tainted-test` as an online-ready build yet.
-
-After starting and exiting the game, collect diagnostics:
-
-```bash
-bash tools/deck-collect.sh
-```
-
-Remove only this project's files with:
-
-```bash
-bash tools/deck-uninstall.sh
-```
-
-Do not publish a build as an active gameplay fix while diagnostics report a
-diagnostic, `generic-test`, or `tainted-test` status.
+技术记录见 [`docs/reverse-engineering.md`](docs/reverse-engineering.md)，Windows 安装细节见 [`docs/deployment-windows.md`](docs/deployment-windows.md)。
