@@ -1,0 +1,48 @@
+name: native-input-fix
+
+on:
+  push:
+    paths:
+      - 'native-input-fix/**'
+      - '.github/workflows/native-input-fix.yml'
+  pull_request:
+    paths:
+      - 'native-input-fix/**'
+      - '.github/workflows/native-input-fix.yml'
+  workflow_dispatch:
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native-input-fix
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  windows-x86:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: native-input-fix
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Win32
+        run: cmake -S . -B build -A Win32
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        run: cmake --build build --config Release --target package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IsaacNativeInputFix-windows-x86
+          path: native-input-fix/build/package/IsaacNativeInputFix
+          if-no-files-found: error

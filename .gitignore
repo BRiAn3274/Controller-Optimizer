@@ -9,4 +9,4 @@
 workshop_build_item.vdf
 
 # Local AI task staging and temporary deployment credentials.
-.cache/ai/
+.cache/
