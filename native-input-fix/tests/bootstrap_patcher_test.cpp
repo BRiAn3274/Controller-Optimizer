@@ -18,7 +18,7 @@ bool Run(const std::wstring& executable, const std::wstring& target) {
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
-    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0,
+    if (!CreateProcessW(nullptr, &command[0], nullptr, nullptr, FALSE, 0,
             nullptr, nullptr, &startup, &process)) return false;
     WaitForSingleObject(process.hProcess, 30000);
     DWORD exitCode{};
