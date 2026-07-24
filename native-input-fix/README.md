@@ -11,7 +11,7 @@
 1. 解压完整 zip，保持 `IsaacInputPatcher.exe`、`bootstp.dll` 和 `azazel_input_hook.dll` 在同一目录。
 2. 在 Steam 中完全关闭 Isaac。
 3. 双击 `IsaacInputPatcher.exe`，选择游戏目录中的 `isaac-ng.exe`。
-4. 若 EXE 仍导入 `userenv`，安装器创建 `isaac-ng.exe.cofix-original` 并把该导入改为同长度的 `bootstp`；若汉化补丁已经安装，则不再修改 EXE，而是保存并链式调用其现有 `bootstp.dll`。
+4. 若 EXE 中的动态库名仍为 `userenv`，安装器创建 `isaac-ng.exe.cofix-original` 并把这个唯一字符串等长改为 `bootstp`；若汉化补丁已经完成该改动，则不再修改 EXE，而是保存并链式调用其现有 `bootstp.dll`。
 5. 此后直接从 Steam 启动游戏。兼容桥会先调用原有汉化 bootstrap（如有），否则转发系统 `userenv.dll`，再加载输入过滤 DLL。
 
 安装器不分发汉化补丁代码或二进制。检测到其 `bootstp.dll` 时，会在本机保存为 `cofix_bootstrap_chain.dll` 并保持原有调用顺序；`inject.dll` 和 `language_unlocker.dll` 不会被修改。

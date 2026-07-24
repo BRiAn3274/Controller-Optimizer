@@ -20,7 +20,7 @@
 4. 等待“Automatic loader installed”成功提示。
 5. 从 Steam 正常启动游戏。
 
-未安装其他 bootstrap 时，安装器会创建 `isaac-ng.exe.cofix-original`，只把 PE 导入表中的 `userenv` 改为同长度的 `bootstp`。若汉化补丁已经完成同一改动，则 EXE 不再变化；现有 `bootstp.dll` 会保存为 `cofix_bootstrap_chain.dll`，由本项目桥接后继续原样调用。安装器不修改 `.text`，也不需要常驻启动器。
+未安装其他 bootstrap 时，安装器会创建 `isaac-ng.exe.cofix-original`，只把经 PE32/i386 校验且全文件唯一的动态库名 `userenv\0` 等长改为 `bootstp\0`。若汉化补丁已经完成同一改动，则 EXE 不再变化；现有 `bootstp.dll` 会保存为 `cofix_bootstrap_chain.dll`，由本项目桥接后继续原样调用。安装器不修改 `.text`，也不需要常驻启动器。
 
 ## 卸载与恢复
 

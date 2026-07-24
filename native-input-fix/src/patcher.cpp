@@ -4,8 +4,6 @@
 #include <commdlg.h>
 #include <shellapi.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -61,31 +59,10 @@ bool CopyFileAtomic(const std::wstring& source, const std::wstring& target) {
     return true;
 }
 
-DWORD RvaToOffset(const IMAGE_NT_HEADERS32* headers, DWORD rva) {
-    const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
-    for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
-        const DWORD start = section[index].VirtualAddress;
-        const DWORD size = std::max(section[index].Misc.VirtualSize, section[index].SizeOfRawData);
-        if (rva >= start && rva < start + size) return section[index].PointerToRawData + rva - start;
-    }
-    return 0;
-}
-
-bool EqualsIgnoreCase(const char* left, const char* right) {
-    while (*left && *right) {
-        if (std::tolower(static_cast<unsigned char>(*left)) != std::tolower(static_cast<unsigned char>(*right))) {
-            return false;
-        }
-        ++left;
-        ++right;
-    }
-    return *left == *right;
-}
-
 enum class PatchState { Invalid, Ready, AlreadyInstalled };
 
-PatchState FindBootstrapImport(std::vector<BYTE>& bytes, char*& importName) {
-    importName = nullptr;
+PatchState FindBootstrapMarker(std::vector<BYTE>& bytes, char*& libraryName) {
+    libraryName = nullptr;
     if (bytes.size() < sizeof(IMAGE_DOS_HEADER)) return PatchState::Invalid;
     auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(bytes.data());
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
@@ -93,24 +70,28 @@ PatchState FindBootstrapImport(std::vector<BYTE>& bytes, char*& importName) {
     auto* nt = reinterpret_cast<IMAGE_NT_HEADERS32*>(bytes.data() + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
         nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) return PatchState::Invalid;
-    const IMAGE_DATA_DIRECTORY& imports = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    const DWORD importOffset = RvaToOffset(nt, imports.VirtualAddress);
-    if (!importOffset || importOffset >= bytes.size()) return PatchState::Invalid;
-    auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(bytes.data() + importOffset);
-    for (size_t index = 0; index < 256; ++index, ++descriptor) {
-        if (reinterpret_cast<BYTE*>(descriptor + 1) > bytes.data() + bytes.size()) return PatchState::Invalid;
-        if (!descriptor->Name) break;
-        const DWORD nameOffset = RvaToOffset(nt, descriptor->Name);
-        if (!nameOffset || nameOffset + sizeof(kOriginalImport) > bytes.size()) return PatchState::Invalid;
-        char* name = reinterpret_cast<char*>(bytes.data() + nameOffset);
-        if (EqualsIgnoreCase(name, kOriginalImport)) {
-            importName = name;
-            return PatchState::Ready;
+    size_t originalMatches{};
+    size_t patchedMatches{};
+    char* original{};
+    char* patched{};
+    for (size_t offset = 0; offset + sizeof(kOriginalImport) <= bytes.size(); ++offset) {
+        char* candidate = reinterpret_cast<char*>(bytes.data() + offset);
+        if (std::memcmp(candidate, kOriginalImport, sizeof(kOriginalImport)) == 0) {
+            ++originalMatches;
+            original = candidate;
         }
-        if (EqualsIgnoreCase(name, kPatchedImport)) {
-            importName = name;
-            return PatchState::AlreadyInstalled;
+        if (std::memcmp(candidate, kPatchedImport, sizeof(kPatchedImport)) == 0) {
+            ++patchedMatches;
+            patched = candidate;
         }
+    }
+    if (originalMatches == 1 && patchedMatches == 0) {
+        libraryName = original;
+        return PatchState::Ready;
+    }
+    if (patchedMatches == 1 && originalMatches == 0) {
+        libraryName = patched;
+        return PatchState::AlreadyInstalled;
     }
     return PatchState::Invalid;
 }
@@ -157,11 +138,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     std::vector<BYTE> bytes;
-    char* importName{};
+    char* libraryName{};
     const PatchState state = ReadFile(executable, bytes)
-        ? FindBootstrapImport(bytes, importName) : PatchState::Invalid;
+        ? FindBootstrapMarker(bytes, libraryName) : PatchState::Invalid;
     if (state == PatchState::Invalid) {
-        Notify(L"This executable is not a supported Isaac Win32 build or its userenv/bootstp import was not found.",
+        Notify(L"This executable is not a supported Isaac Win32 build or its unique userenv/bootstp loader name was not found.",
             MB_OK | MB_ICONERROR);
         return 3;
     }
@@ -188,7 +169,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 MB_OK | MB_ICONERROR);
             return 4;
         }
-        std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
+        std::memcpy(libraryName, kOriginalImport, sizeof(kOriginalImport));
         if (!WriteFile(executable, bytes)) {
             Notify(L"Could not restore isaac-ng.exe. Check permissions and confirm the game is closed.",
                 MB_OK | MB_ICONERROR);
@@ -217,7 +198,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 5;
     }
     if (state == PatchState::Ready && inif::FileExists(bridge)) {
-        Notify(L"A bootstp.dll exists although Isaac still imports userenv. Nothing was overwritten.",
+        Notify(L"A bootstp.dll exists although Isaac still names userenv. Nothing was overwritten.",
             MB_OK | MB_ICONERROR);
         return 5;
     }
@@ -248,7 +229,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             Notify(L"Could not create the original executable backup. No changes were made.", MB_OK | MB_ICONERROR);
             return 7;
         }
-        std::memcpy(importName, kPatchedImport, sizeof(kPatchedImport));
+        std::memcpy(libraryName, kPatchedImport, sizeof(kPatchedImport));
         if (!WriteFile(executable, bytes)) {
             DeleteFileW(bridge.c_str());
             DeleteFileW(payload.c_str());
@@ -261,7 +242,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             CopyFileAtomic(chain, bridge);
             DeleteFileW(chain.c_str());
         } else if (state == PatchState::Ready) {
-            std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
+            std::memcpy(libraryName, kOriginalImport, sizeof(kOriginalImport));
             WriteFile(executable, bytes);
             DeleteFileW(bridge.c_str());
         }

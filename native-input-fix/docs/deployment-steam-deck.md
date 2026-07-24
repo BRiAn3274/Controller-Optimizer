@@ -24,8 +24,8 @@ The end-user flow mirrors other one-time Proton patch installers:
 4. Confirm installation once, then remove the patcher shortcut if desired.
 5. Start Isaac normally from its original Steam library entry thereafter.
 
-If Isaac still imports `userenv`, the patcher creates
-`isaac-ng.exe.cofix-original` and changes that import to `bootstp`. If another
+If Isaac still names `userenv` at its dynamic loader point, the patcher creates
+`isaac-ng.exe.cofix-original` and changes that unique string to `bootstp`. If another
 patch already installed `bootstp.dll`, the executable is left untouched and
 that DLL is preserved as `cofix_bootstrap_chain.dll`. The bridge invokes it
 before attaching the independent input payload.
