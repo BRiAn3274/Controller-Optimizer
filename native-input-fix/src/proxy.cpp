@@ -73,6 +73,14 @@ void EnsureHook() {
     InitOnceExecuteOnce(&g_hookOnce, LoadHook, nullptr, nullptr);
 }
 
+DWORD WINAPI BootstrapHook(LPVOID) {
+    // A newly created thread does not begin executing until DllMain has
+    // returned and the loader lock is available.  This makes payload loading
+    // independent of whether Isaac happens to call one of its WinMM imports.
+    EnsureHook();
+    return 0;
+}
+
 } // namespace
 
 extern "C" MMRESULT WINAPI timeBeginPeriod(UINT period) {
@@ -97,6 +105,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_module = instance;
         DisableThreadLibraryCalls(instance);
+        HANDLE bootstrap = CreateThread(nullptr, 0, BootstrapHook, nullptr, 0, nullptr);
+        if (bootstrap) CloseHandle(bootstrap);
     }
     return TRUE;
 }
