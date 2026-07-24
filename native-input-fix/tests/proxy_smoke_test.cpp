@@ -27,6 +27,7 @@ bool WaitForDiagnostic(const std::wstring& path) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) return 2;
+    SetEnvironmentVariableW(L"INIF_PROXY_SMOKE_TEST", L"1");
     const std::wstring diagnostic = DiagnosticPath();
     if (!diagnostic.empty()) DeleteFileW(diagnostic.c_str());
     HMODULE proxy = LoadLibraryW(argv[1]);

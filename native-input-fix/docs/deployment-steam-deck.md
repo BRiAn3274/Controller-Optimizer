@@ -14,7 +14,22 @@ The scripts assume `deck@192.168.1.235` and the SSH key at
 `~/.ssh/controller_optimizer_deck_ed25519`. Override with `DECK_HOST` and
 `DECK_KEY` if necessary.
 
-## Install and test
+## Persistent automatic-loader install
+
+The end-user flow mirrors other one-time Proton patch installers:
+
+1. Add `IsaacInputPatcher.exe` to Steam as a non-Steam game.
+2. Force the same Proton compatibility tool used by Isaac.
+3. Start the patcher from Steam and select `isaac-ng.exe` in the file picker.
+4. Confirm installation once, then remove the patcher shortcut if desired.
+5. Start Isaac normally from its original Steam library entry thereafter.
+
+The patcher creates `isaac-ng.exe.cofix-original`, changes only the WinMM
+import name, and installs `cofix.dll` plus the input payload beside the game.
+No launcher or per-session injector is needed. Re-run the patcher after Steam
+replaces `isaac-ng.exe` during a game update or reinstall.
+
+## Developer injection test
 
 From macOS or Linux, with the package directory as the argument:
 

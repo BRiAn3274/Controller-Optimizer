@@ -75,8 +75,13 @@ void EnsureHook() {
 
 DWORD WINAPI BootstrapHook(LPVOID) {
     // A newly created thread does not begin executing until DllMain has
-    // returned and the loader lock is available.  This makes payload loading
-    // independent of whether Isaac happens to call one of its WinMM imports.
+    // returned and the loader lock is available. Isaac needs additional time
+    // to construct the native input objects that the payload discovers.
+    wchar_t smokeTest[2]{};
+    if (!GetEnvironmentVariableW(L"INIF_PROXY_SMOKE_TEST", smokeTest,
+            static_cast<DWORD>(std::size(smokeTest)))) {
+        Sleep(10000);
+    }
     EnsureHook();
     return 0;
 }
@@ -85,19 +90,16 @@ DWORD WINAPI BootstrapHook(LPVOID) {
 
 extern "C" MMRESULT WINAPI timeBeginPeriod(UINT period) {
     EnsureSystemWinmm();
-    EnsureHook();
     return g_timeBeginPeriod ? g_timeBeginPeriod(period) : TIMERR_NOCANDO;
 }
 
 extern "C" MMRESULT WINAPI timeEndPeriod(UINT period) {
     EnsureSystemWinmm();
-    EnsureHook();
     return g_timeEndPeriod ? g_timeEndPeriod(period) : TIMERR_NOCANDO;
 }
 
 extern "C" MMRESULT WINAPI timeGetDevCaps(LPTIMECAPS caps, UINT size) {
     EnsureSystemWinmm();
-    EnsureHook();
     return g_timeGetDevCaps ? g_timeGetDevCaps(caps, size) : TIMERR_NOCANDO;
 }
 
