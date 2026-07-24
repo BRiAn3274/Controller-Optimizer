@@ -13,8 +13,12 @@
 
 namespace {
 
-constexpr char kOriginalImport[] = "WINMM.dll";
-constexpr char kPatchedImport[] = "cofix.dll";
+constexpr char kOriginalImport[] = "userenv";
+constexpr char kPatchedImport[] = "bootstp";
+constexpr wchar_t kBridgeName[] = L"bootstp.dll";
+constexpr wchar_t kChainName[] = L"cofix_bootstrap_chain.dll";
+constexpr wchar_t kPayloadName[] = L"azazel_input_hook.dll";
+constexpr wchar_t kOwnerMarker[] = L"cofix_bootstrap_owner.txt";
 bool g_silent{};
 
 void Notify(const wchar_t* message, UINT flags) {
@@ -45,6 +49,18 @@ bool WriteFile(const std::wstring& path, const std::vector<BYTE>& bytes) {
     return true;
 }
 
+bool CopyFileAtomic(const std::wstring& source, const std::wstring& target) {
+    const std::wstring temporary = target + L".cofix.tmp";
+    DeleteFileW(temporary.c_str());
+    if (!CopyFileW(source.c_str(), temporary.c_str(), TRUE) ||
+        !MoveFileExW(temporary.c_str(), target.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str());
+        return false;
+    }
+    return true;
+}
+
 DWORD RvaToOffset(const IMAGE_NT_HEADERS32* headers, DWORD rva) {
     const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(headers);
     for (WORD index = 0; index < headers->FileHeader.NumberOfSections; ++index) {
@@ -68,7 +84,7 @@ bool EqualsIgnoreCase(const char* left, const char* right) {
 
 enum class PatchState { Invalid, Ready, AlreadyInstalled };
 
-PatchState FindWinmmImport(std::vector<BYTE>& bytes, char*& importName) {
+PatchState FindBootstrapImport(std::vector<BYTE>& bytes, char*& importName) {
     importName = nullptr;
     if (bytes.size() < sizeof(IMAGE_DOS_HEADER)) return PatchState::Invalid;
     auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(bytes.data());
@@ -104,7 +120,7 @@ bool CopySibling(const std::wstring& sourceDirectory, const std::wstring& target
     const wchar_t* filename) {
     const std::wstring source = inif::Join(sourceDirectory, filename);
     const std::wstring target = inif::Join(targetDirectory, filename);
-    return inif::FileExists(source) && CopyFileW(source.c_str(), target.c_str(), FALSE);
+    return inif::FileExists(source) && CopyFileAtomic(source, target);
 }
 #endif
 
@@ -142,49 +158,123 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     std::vector<BYTE> bytes;
     char* importName{};
-    const PatchState state = ReadFile(executable, bytes) ? FindWinmmImport(bytes, importName) : PatchState::Invalid;
+    const PatchState state = ReadFile(executable, bytes)
+        ? FindBootstrapImport(bytes, importName) : PatchState::Invalid;
     if (state == PatchState::Invalid) {
-        Notify(L"This executable is not a supported Isaac Win32 build or its WINMM import was not found.", MB_OK | MB_ICONERROR);
+        Notify(L"This executable is not a supported Isaac Win32 build or its userenv/bootstp import was not found.",
+            MB_OK | MB_ICONERROR);
         return 3;
     }
     const std::wstring gameDirectory = inif::DirectoryOf(executable);
+    const std::wstring bridge = inif::Join(gameDirectory, kBridgeName);
+    const std::wstring chain = inif::Join(gameDirectory, kChainName);
+    const std::wstring payload = inif::Join(gameDirectory, kPayloadName);
+    const std::wstring owner = inif::Join(gameDirectory, kOwnerMarker);
 #ifdef INIF_UNINSTALLER
-    if (state != PatchState::AlreadyInstalled) {
+    if (!inif::FileExists(owner)) {
         Notify(L"The automatic loader is not installed in this executable.", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
-    std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
-    if (!WriteFile(executable, bytes)) {
-        Notify(L"Could not restore isaac-ng.exe. Check permissions and confirm the game is closed.",
-            MB_OK | MB_ICONERROR);
-        return 4;
+    if (inif::FileExists(chain)) {
+        if (!CopyFileAtomic(chain, bridge)) {
+            Notify(L"Could not restore the pre-existing bootstp.dll. Nothing was removed.",
+                MB_OK | MB_ICONERROR);
+            return 4;
+        }
+        DeleteFileW(chain.c_str());
+    } else {
+        if (state != PatchState::AlreadyInstalled) {
+            Notify(L"Loader ownership metadata and executable state disagree. Nothing was removed.",
+                MB_OK | MB_ICONERROR);
+            return 4;
+        }
+        std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
+        if (!WriteFile(executable, bytes)) {
+            Notify(L"Could not restore isaac-ng.exe. Check permissions and confirm the game is closed.",
+                MB_OK | MB_ICONERROR);
+            return 4;
+        }
+        DeleteFileW(bridge.c_str());
     }
-    DeleteFileW(inif::Join(gameDirectory, L"cofix.dll").c_str());
-    DeleteFileW(inif::Join(gameDirectory, L"azazel_input_hook.dll").c_str());
+    DeleteFileW(payload.c_str());
+    DeleteFileW(owner.c_str());
     Notify(L"Automatic loader removed. Steam will start Isaac without this input fix.", MB_OK | MB_ICONINFORMATION);
     return 0;
 #else
     const std::wstring packageDirectory = inif::DirectoryOf(inif::ModulePath(nullptr));
-    if (!CopySibling(packageDirectory, gameDirectory, L"cofix.dll") ||
-        !CopySibling(packageDirectory, gameDirectory, L"azazel_input_hook.dll")) {
-        Notify(L"Could not copy cofix.dll or azazel_input_hook.dll beside the game executable.", MB_OK | MB_ICONERROR);
+    const std::wstring packageBridge = inif::Join(packageDirectory, kBridgeName);
+    if (!inif::FileExists(packageBridge) ||
+        !inif::FileExists(inif::Join(packageDirectory, kPayloadName))) {
+        Notify(L"The installer package is incomplete. Keep the EXE and both DLL files together.",
+            MB_OK | MB_ICONERROR);
         return 4;
+    }
+    const bool refreshingOwnedBridge = inif::FileExists(owner);
+    bool chainCreated{};
+    if (state == PatchState::Ready && refreshingOwnedBridge) {
+        Notify(L"Loader metadata exists but isaac-ng.exe is no longer patched. Nothing was changed.",
+            MB_OK | MB_ICONERROR);
+        return 5;
+    }
+    if (state == PatchState::Ready && inif::FileExists(bridge)) {
+        Notify(L"A bootstp.dll exists although Isaac still imports userenv. Nothing was overwritten.",
+            MB_OK | MB_ICONERROR);
+        return 5;
+    }
+    if (state == PatchState::AlreadyInstalled && !refreshingOwnedBridge) {
+        if (!inif::FileExists(bridge) || inif::FileExists(chain) ||
+            !CopyFileW(bridge.c_str(), chain.c_str(), TRUE)) {
+            Notify(L"Could not preserve the existing bootstp.dll. Nothing was overwritten.",
+                MB_OK | MB_ICONERROR);
+            return 5;
+        }
+        chainCreated = true;
+    }
+    if (!CopySibling(packageDirectory, gameDirectory, kPayloadName) ||
+        !CopyFileAtomic(packageBridge, bridge)) {
+        if (chainCreated) {
+            CopyFileAtomic(chain, bridge);
+            DeleteFileW(chain.c_str());
+        }
+        Notify(L"Could not install bootstp.dll or azazel_input_hook.dll beside the game executable.",
+            MB_OK | MB_ICONERROR);
+        return 6;
     }
     if (state == PatchState::Ready) {
         const std::wstring backup = executable + L".cofix-original";
         if (!inif::FileExists(backup) && !CopyFileW(executable.c_str(), backup.c_str(), TRUE)) {
+            DeleteFileW(bridge.c_str());
+            DeleteFileW(payload.c_str());
             Notify(L"Could not create the original executable backup. No changes were made.", MB_OK | MB_ICONERROR);
-            return 5;
+            return 7;
         }
         std::memcpy(importName, kPatchedImport, sizeof(kPatchedImport));
         if (!WriteFile(executable, bytes)) {
+            DeleteFileW(bridge.c_str());
+            DeleteFileW(payload.c_str());
             Notify(L"Could not update isaac-ng.exe. Check permissions and confirm the game is closed.", MB_OK | MB_ICONERROR);
-            return 6;
+            return 8;
         }
     }
+    if (!inif::WriteTextAtomic(owner, "Controller Optimizer bootstrap bridge\r\n")) {
+        if (chainCreated) {
+            CopyFileAtomic(chain, bridge);
+            DeleteFileW(chain.c_str());
+        } else if (state == PatchState::Ready) {
+            std::memcpy(importName, kOriginalImport, sizeof(kOriginalImport));
+            WriteFile(executable, bytes);
+            DeleteFileW(bridge.c_str());
+        }
+        DeleteFileW(payload.c_str());
+        Notify(L"Could not write loader ownership metadata; installation was rolled back.",
+            MB_OK | MB_ICONERROR);
+        return 9;
+    }
     Notify(state == PatchState::Ready
-        ? L"Automatic loader installed. Start Isaac normally from Steam; the input fix will load with the game."
-        : L"Automatic loader was already installed. The loader files were refreshed.",
+        ? L"Automatic loader installed using Isaac's userenv bootstrap point. Start Isaac normally from Steam."
+        : refreshingOwnedBridge
+            ? L"Automatic loader files refreshed; the existing bootstrap chain was preserved."
+            : L"Automatic loader installed and the existing bootstp.dll was preserved in the compatibility chain.",
         MB_OK | MB_ICONINFORMATION);
     return 0;
 #endif

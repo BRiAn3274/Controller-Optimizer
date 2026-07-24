@@ -8,23 +8,23 @@
 
 发布包已包含静态链接的 Windows x86 程序，不需要额外安装 Visual C++ 运行库。
 
-1. 解压完整 zip，保持 `IsaacInputPatcher.exe`、`cofix.dll` 和 `azazel_input_hook.dll` 在同一目录。
+1. 解压完整 zip，保持 `IsaacInputPatcher.exe`、`bootstp.dll` 和 `azazel_input_hook.dll` 在同一目录。
 2. 在 Steam 中完全关闭 Isaac。
 3. 双击 `IsaacInputPatcher.exe`，选择游戏目录中的 `isaac-ng.exe`。
-4. 安装器创建 `isaac-ng.exe.cofix-original` 备份，把 EXE 的 `WINMM.dll` 导入改为私有的 `cofix.dll`，并把 loader 文件复制到游戏目录。
-5. 此后直接从 Steam 启动游戏。`cofix.dll` 会原样转发 Isaac 所需的三个 WinMM 函数，并自动加载输入过滤 DLL。
+4. 若 EXE 仍导入 `userenv`，安装器创建 `isaac-ng.exe.cofix-original` 并把该导入改为同长度的 `bootstp`；若汉化补丁已经安装，则不再修改 EXE，而是保存并链式调用其现有 `bootstp.dll`。
+5. 此后直接从 Steam 启动游戏。兼容桥会先调用原有汉化 bootstrap（如有），否则转发系统 `userenv.dll`，再加载输入过滤 DLL。
 
-安装器不覆盖汉化补丁已有的 `bootstp.dll`、`inject.dll` 或 `language_unlocker.dll`。
+安装器不分发汉化补丁代码或二进制。检测到其 `bootstp.dll` 时，会在本机保存为 `cofix_bootstrap_chain.dll` 并保持原有调用顺序；`inject.dll` 和 `language_unlocker.dll` 不会被修改。
 
 ## 卸载
 
-完全关闭 Isaac 后运行 `IsaacInputUnpatcher.exe`，选择同一个 `isaac-ng.exe`。它只还原本项目的 WinMM 导入改动，并删除 `cofix.dll` 与 `azazel_input_hook.dll`。保留的 `.cofix-original` 备份可用于人工核对；Steam 的“验证游戏文件完整性”也可以恢复原始 EXE。
+完全关闭 Isaac 后运行 `IsaacInputUnpatcher.exe`，选择同一个 `isaac-ng.exe`。若安装前存在汉化 bootstrap，它会原样恢复；否则还原 `bootstp -> userenv`。随后只删除本项目的 payload 和所有权标记。Steam 的“验证游戏文件完整性”也可以恢复 EXE。
 
 ## 输入范围与安全边界
 
 - 仅处理捕获到的本地输入对象和射击 action `4..7`。
 - 不修改网络包、联机协议、远端状态、XInput、攻击实体、伤害、激光生命周期或存档。
-- 只在已验证的 PE32/i386、输入 bridge 指纹和方法序言均匹配时安装主动 hook；否则写诊断并不改输入。
+- 只在已验证的 PE32/i386、输入 bridge 指纹和方法序言均匹配时安装主动 hook；输入对象只通过游戏自然调用被动捕获，不在启动期主动调用内部游戏函数。
 - 当前已实测的目标：Repentance+ `1.9.7.17.J460`，Steam build `22878971`，Proton `9.0-203`。
 
 ## 配置与诊断

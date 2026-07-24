@@ -18,7 +18,7 @@ struct ImageAnalysis {
     DWORD textRva{};
     DWORD textSize{};
     DWORD timestamp{};
-    bool cofixLoaderDetected{};
+    bool bootstrapLoaderDetected{};
     size_t pressedWrapperMatches{};
     size_t triggeredWrapperMatches{};
     size_t valueWrapperMatches{};
@@ -41,7 +41,9 @@ struct InputCapture {
 
 using ValueBridgeFn = bool (__cdecl*)(void*, void*, int*, float*);
 ValueBridgeFn g_originalValueBridge{};
-InputCapture* g_capture{};
+std::atomic<InputCapture*> g_capture{};
+std::atomic<bool> g_captureClaimed{};
+std::atomic<bool> g_captureReady{};
 
 using ValueMethodFn = float (__thiscall*)(void*, int);
 using BoolMethodFn = bool (__thiscall*)(void*, int);
@@ -80,15 +82,19 @@ void RecordReturnSite() {
 }
 
 bool __cdecl CaptureValueBridge(void* inputObject, void* callbackState, int* action, float* output) {
-    if (g_capture && inputObject) {
+    InputCapture* capture = g_capture.load(std::memory_order_acquire);
+    if (capture && inputObject) {
         auto** vtable = *reinterpret_cast<void***>(inputObject);
-        if (vtable) {
-            g_capture->captured = true;
-            g_capture->objectAddress = static_cast<DWORD>(reinterpret_cast<uintptr_t>(inputObject));
-            g_capture->vtableAddress = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable));
-            g_capture->pressedMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x30 / 4]));
-            g_capture->triggeredMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x34 / 4]));
-            g_capture->valueMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x38 / 4]));
+        bool expected{};
+        if (vtable && g_captureClaimed.compare_exchange_strong(expected, true,
+                std::memory_order_acq_rel)) {
+            capture->captured = true;
+            capture->objectAddress = static_cast<DWORD>(reinterpret_cast<uintptr_t>(inputObject));
+            capture->vtableAddress = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable));
+            capture->pressedMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x30 / 4]));
+            capture->triggeredMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x34 / 4]));
+            capture->valueMethod = static_cast<DWORD>(reinterpret_cast<uintptr_t>(vtable[0x38 / 4]));
+            g_captureReady.store(true, std::memory_order_release);
         }
     }
     return g_originalValueBridge
@@ -302,10 +308,9 @@ InputCapture CaptureNativeInputObject(BYTE* image, const ImageAnalysis& analysis
     if (!approved || analysis.valueWrapperMatches != 1 || analysis.valueWrapperRva < 0x2B) return capture;
     capture.attempted = true;
 
-    // Exact for the approved J460 image. This wrapper accepts
-    // (ButtonAction action, int controllerIndex) and routes through the bridge
-    // discovered at valueWrapperRva - 0x2B.
-    constexpr DWORD getActionValueRva = 0x0046FD70;
+    // Exact for the approved J460 image. Install a temporary passive detour
+    // and wait for the game to supply a real, initialized input object. Do not
+    // invoke an internal game function during startup.
     BYTE* bridge = image + analysis.valueWrapperRva - 0x2B;
     BYTE original[5]{};
     static constexpr BYTE expected[5] = {0x55, 0x8B, 0xEC, 0x6A, 0xFF};
@@ -321,18 +326,17 @@ InputCapture CaptureNativeInputObject(BYTE* image, const ImageAnalysis& analysis
         return capture;
     }
     g_originalValueBridge = reinterpret_cast<ValueBridgeFn>(trampoline);
-    g_capture = &capture;
+    g_captureClaimed.store(false, std::memory_order_relaxed);
+    g_captureReady.store(false, std::memory_order_relaxed);
+    g_capture.store(&capture, std::memory_order_release);
 
     DWORD oldProtection{};
     if (VirtualProtect(bridge, sizeof(original), PAGE_EXECUTE_READWRITE, &oldProtection)) {
         if (WriteRelativeJump(bridge, reinterpret_cast<const void*>(&CaptureValueBridge))) {
             FlushInstructionCache(GetCurrentProcess(), bridge, sizeof(original));
             capture.detourInstalled = true;
-            using GetActionValueFn = float (__cdecl*)(int, int);
-            auto getActionValue = reinterpret_cast<GetActionValueFn>(image + getActionValueRva);
-            volatile float sampled{};
-            for (int action = 4; action <= 7; ++action) sampled += getActionValue(action, 1);
-            (void)sampled;
+            for (int attempt = 0; attempt < 6000 &&
+                    !g_captureReady.load(std::memory_order_acquire); ++attempt) Sleep(10);
         }
         std::memcpy(bridge, original, sizeof(original));
         FlushInstructionCache(GetCurrentProcess(), bridge, sizeof(original));
@@ -340,9 +344,10 @@ InputCapture CaptureNativeInputObject(BYTE* image, const ImageAnalysis& analysis
         VirtualProtect(bridge, sizeof(original), oldProtection, &ignored);
         capture.restored = std::memcmp(bridge, original, sizeof(original)) == 0;
     }
-    g_capture = nullptr;
-    g_originalValueBridge = nullptr;
-    VirtualFree(trampoline, 0, MEM_RELEASE);
+    g_capture.store(nullptr, std::memory_order_release);
+    // Keep this tiny trampoline for the process lifetime. A bridge invocation
+    // already in flight may still be returning through it while the original
+    // bytes are restored.
     return capture;
 }
 
@@ -370,12 +375,12 @@ ImageAnalysis AnalyzeImage() {
     result.pe32 = true;
     result.imageSize = nt->OptionalHeader.SizeOfImage;
     result.timestamp = nt->FileHeader.TimeDateStamp;
-    static constexpr BYTE cofixName[] = {'c', 'o', 'f', 'i', 'x', '.', 'd', 'l', 'l', 0};
-    size_t cofixMatches{};
-    for (DWORD offset = 0; offset + sizeof(cofixName) <= result.imageSize; ++offset) {
-        if (std::memcmp(image + offset, cofixName, sizeof(cofixName)) == 0) ++cofixMatches;
+    static constexpr BYTE bootstrapName[] = {'b', 'o', 'o', 't', 's', 't', 'p', 0};
+    size_t bootstrapMatches{};
+    for (DWORD offset = 0; offset + sizeof(bootstrapName) <= result.imageSize; ++offset) {
+        if (std::memcmp(image + offset, bootstrapName, sizeof(bootstrapName)) == 0) ++bootstrapMatches;
     }
-    result.cofixLoaderDetected = cofixMatches == 1;
+    result.bootstrapLoaderDetected = bootstrapMatches == 1;
     const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
     for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
         if (std::memcmp(section[i].Name, ".text", 5) == 0 &&
@@ -438,7 +443,7 @@ DWORD WINAPI Initialize(void*) {
     const std::string runtime = WineVersion();
     const bool exactDeckHash = hashed &&
         _wcsicmp(hash.c_str(), L"7122AC28779925B24E23E2416F231322B1470388BD25E2C08665AD8D53B3EA4F") == 0;
-    const bool observedDeckBuild = exactDeckHash || analysis.cofixLoaderDetected;
+    const bool observedDeckBuild = exactDeckHash || analysis.bootstrapLoaderDetected;
     const std::wstring configPath = inif::Join(state, L"config.ini");
     wchar_t modeBuffer[32]{};
     GetPrivateProfileStringW(L"hook", L"mode", L"diagnostic", modeBuffer,
@@ -487,7 +492,7 @@ DWORD WINAPI Initialize(void*) {
         "    \"value_wrapper_rva\": \"%08lX\"\r\n"
         "  },\r\n"
         "  \"observed_deck_build\": %s,\r\n"
-        "  \"cofix_loader_detected\": %s,\r\n"
+        "  \"bootstrap_loader_detected\": %s,\r\n"
         "  \"requested_mode\": \"%s\",\r\n"
         "  \"runtime_capture\": {\r\n"
         "    \"attempted\": %s,\r\n"
@@ -514,7 +519,7 @@ DWORD WINAPI Initialize(void*) {
         analysis.triggeredWrapperMatches, analysis.triggeredWrapperRva,
         analysis.valueWrapperMatches, analysis.valueWrapperRva,
         observedDeckBuild ? "true" : "false",
-        analysis.cofixLoaderDetected ? "true" : "false",
+        analysis.bootstrapLoaderDetected ? "true" : "false",
         requestedMode,
         capture.attempted ? "true" : "false",
         capture.detourInstalled ? "true" : "false",

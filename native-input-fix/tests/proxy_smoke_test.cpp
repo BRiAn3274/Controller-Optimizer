@@ -1,5 +1,5 @@
 #include <windows.h>
-#include <mmsystem.h>
+#include <userenv.h>
 
 #include <iostream>
 #include <iterator>
@@ -27,20 +27,24 @@ bool WaitForDiagnostic(const std::wstring& path) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 2) return 2;
-    SetEnvironmentVariableW(L"INIF_PROXY_SMOKE_TEST", L"1");
     const std::wstring diagnostic = DiagnosticPath();
     if (!diagnostic.empty()) DeleteFileW(diagnostic.c_str());
     HMODULE proxy = LoadLibraryW(argv[1]);
     if (!proxy) return 3;
-    using TimeGetDevCapsFn = MMRESULT (WINAPI*)(LPTIMECAPS, UINT);
-    auto getCaps = reinterpret_cast<TimeGetDevCapsFn>(GetProcAddress(proxy, "timeGetDevCaps"));
-    if (!getCaps) return 4;
-    TIMECAPS caps{};
-    const MMRESULT result = getCaps(&caps, sizeof(caps));
+    using GetUserProfileDirectoryAFn = BOOL (WINAPI*)(HANDLE, LPSTR, LPDWORD);
+    auto getProfile = reinterpret_cast<GetUserProfileDirectoryAFn>(
+        GetProcAddress(proxy, "GetUserProfileDirectoryA"));
+    if (!getProfile) return 4;
+    HANDLE token{};
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return 5;
+    char profile[MAX_PATH]{};
+    DWORD profileSize = static_cast<DWORD>(std::size(profile));
+    const BOOL result = getProfile(token, profile, &profileSize);
+    CloseHandle(token);
     const bool diagnosticWritten = !diagnostic.empty() && WaitForDiagnostic(diagnostic);
     FreeLibrary(proxy);
-    if (result != TIMERR_NOERROR || caps.wPeriodMin == 0) return 5;
-    if (!diagnosticWritten) return 6;
-    std::cout << "proxy_smoke_test: forwarding succeeded\n";
+    if (!result || profile[0] == '\0') return 6;
+    if (!diagnosticWritten) return 7;
+    std::cout << "bootstrap_smoke_test: forwarding succeeded\n";
     return 0;
 }

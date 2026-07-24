@@ -24,8 +24,11 @@ The end-user flow mirrors other one-time Proton patch installers:
 4. Confirm installation once, then remove the patcher shortcut if desired.
 5. Start Isaac normally from its original Steam library entry thereafter.
 
-The patcher creates `isaac-ng.exe.cofix-original`, changes only the WinMM
-import name, and installs `cofix.dll` plus the input payload beside the game.
+If Isaac still imports `userenv`, the patcher creates
+`isaac-ng.exe.cofix-original` and changes that import to `bootstp`. If another
+patch already installed `bootstp.dll`, the executable is left untouched and
+that DLL is preserved as `cofix_bootstrap_chain.dll`. The bridge invokes it
+before attaching the independent input payload.
 No launcher or per-session injector is needed. Re-run the patcher after Steam
 replaces `isaac-ng.exe` during a game update or reinstall.
 
@@ -57,7 +60,8 @@ bash tools/deck-uninstall.sh
 ```
 
 Configuration and diagnostic logs are intentionally retained in the Proton
-prefix. No script overwrites game-root DLLs or user-owned loader files.
+prefix. The legacy developer-injection scripts do not change the persistent
+bootstrap chain.
 
 ## Test scope
 

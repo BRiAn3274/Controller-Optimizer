@@ -30,28 +30,25 @@ if(WIN32)
   target_compile_definitions(azazel_input_hook PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(azazel_input_hook PRIVATE /W4 /utf-8 /GR- /GS /guard:cf-)
 
-  add_library(winmm_proxy SHARED
-    src/proxy.cpp
-    winmm.def
+  add_library(bootstp_bridge SHARED
+    src/bootstrap.cpp
+    bootstp.def
   )
-  target_compile_definitions(winmm_proxy PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-  target_compile_options(winmm_proxy PRIVATE /W4 /utf-8 /GR- /GS)
-  target_link_libraries(winmm_proxy PRIVATE shell32)
-  set_target_properties(winmm_proxy PROPERTIES OUTPUT_NAME "winmm")
-
-  add_library(cofix_proxy SHARED
-    src/proxy.cpp
-    cofix.def
-  )
-  target_compile_definitions(cofix_proxy PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-  target_compile_options(cofix_proxy PRIVATE /W4 /utf-8 /GR- /GS)
-  target_link_libraries(cofix_proxy PRIVATE shell32)
-  set_target_properties(cofix_proxy PROPERTIES OUTPUT_NAME "cofix")
+  target_compile_definitions(bootstp_bridge PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(bootstp_bridge PRIVATE /W4 /utf-8 /GR- /GS)
+  target_link_libraries(bootstp_bridge PRIVATE shell32)
+  set_target_properties(bootstp_bridge PROPERTIES OUTPUT_NAME "bootstp")
 
   add_executable(proxy_smoke_test tests/proxy_smoke_test.cpp)
   target_compile_definitions(proxy_smoke_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(proxy_smoke_test PRIVATE /W4 /utf-8 /GR- /GS)
-  add_test(NAME proxy_forwarding COMMAND proxy_smoke_test "$<TARGET_FILE:winmm_proxy>")
+  target_link_libraries(proxy_smoke_test PRIVATE advapi32)
+  add_test(NAME bootstrap_forwarding COMMAND proxy_smoke_test "$<TARGET_FILE:bootstp_bridge>")
+
+  add_executable(bootstrap_fixture tests/bootstrap_fixture.cpp)
+  target_compile_definitions(bootstrap_fixture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(bootstrap_fixture PRIVATE /W4 /utf-8 /GR- /GS)
+  target_link_libraries(bootstrap_fixture PRIVATE advapi32 userenv)
 
   add_executable(IsaacInputInjector src/injector.cpp src/injection.cpp)
   target_compile_definitions(IsaacInputInjector PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -71,13 +68,19 @@ if(WIN32)
   target_compile_options(IsaacInputUnpatcher PRIVATE /W4 /utf-8 /GR- /GS)
   target_link_libraries(IsaacInputUnpatcher PRIVATE bcrypt shell32 comdlg32)
 
+  add_executable(bootstrap_patcher_test tests/bootstrap_patcher_test.cpp)
+  target_compile_definitions(bootstrap_patcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(bootstrap_patcher_test PRIVATE /W4 /utf-8 /GR- /GS)
+  add_test(NAME bootstrap_patcher_roundtrip COMMAND bootstrap_patcher_test
+    "$<TARGET_FILE:IsaacInputPatcher>" "$<TARGET_FILE:IsaacInputUnpatcher>"
+    "$<TARGET_FILE:bootstrap_fixture>")
+
   set(PACKAGE_DIR "${CMAKE_BINARY_DIR}/package/IsaacNativeInputFix")
   add_custom_target(package
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACKAGE_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:winmm_proxy>" "${PACKAGE_DIR}/winmm.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:cofix_proxy>" "${PACKAGE_DIR}/cofix.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:bootstp_bridge>" "${PACKAGE_DIR}/bootstp.dll"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:azazel_input_hook>" "${PACKAGE_DIR}/azazel_input_hook.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:proxy_smoke_test>" "${PACKAGE_DIR}/WinmmProxyProbe.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:proxy_smoke_test>" "${PACKAGE_DIR}/BootstrapProbe.exe"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:IsaacInputInjector>" "${PACKAGE_DIR}/IsaacInputInjector.exe"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:IsaacInputPatcher>" "${PACKAGE_DIR}/IsaacInputPatcher.exe"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:IsaacInputUnpatcher>" "${PACKAGE_DIR}/IsaacInputUnpatcher.exe"
@@ -95,6 +98,6 @@ if(WIN32)
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-inject.sh" "${PACKAGE_DIR}/tools/deck-inject.sh"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-collect.sh" "${PACKAGE_DIR}/tools/deck-collect.sh"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-uninstall.sh" "${PACKAGE_DIR}/tools/deck-uninstall.sh"
-    DEPENDS winmm_proxy cofix_proxy azazel_input_hook aim_filter_test proxy_smoke_test IsaacInputInjector IsaacInputLauncher IsaacInputPatcher IsaacInputUnpatcher
+    DEPENDS bootstp_bridge azazel_input_hook aim_filter_test proxy_smoke_test IsaacInputInjector IsaacInputLauncher IsaacInputPatcher IsaacInputUnpatcher
   )
 endif()
