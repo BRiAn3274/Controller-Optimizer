@@ -131,6 +131,15 @@ int wmain(int argc, wchar_t** argv) {
         !Exists(Join(directory, L"azazel_input_hook.dll")) ||
         !Exists(Join(directory, L"cofix_bootstrap_owner.txt")) ||
         Exists(Join(directory, L"cofix_bootstrap_chain.dll"))) return 13;
+
+    // Steam can replace the executable while leaving the owned bridge in place.
+    // A supported pristine image must be installable again without losing the
+    // one-time loader arrangement.
+    if (!Write(target, pristine) || !Run(argv[1], target)) return 131;
+    std::vector<char> refreshed;
+    if (!Read(target, refreshed) || Count(refreshed, bootstp) != 1 ||
+        !Exists(Join(directory, L"bootstp.dll")) ||
+        !Exists(Join(directory, L"cofix_bootstrap_owner.txt"))) return 132;
     if (!Run(argv[2], target)) return 14;
     std::vector<char> restored;
     if (!Read(target, restored) || restored != pristine || Exists(Join(directory, L"bootstp.dll")) ||

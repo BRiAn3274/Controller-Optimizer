@@ -98,6 +98,8 @@ if(WIN32)
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-inject.sh" "${PACKAGE_DIR}/tools/deck-inject.sh"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-collect.sh" "${PACKAGE_DIR}/tools/deck-collect.sh"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-uninstall.sh" "${PACKAGE_DIR}/tools/deck-uninstall.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-persistent-install.sh" "${PACKAGE_DIR}/tools/deck-persistent-install.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/deck-persistent-uninstall.sh" "${PACKAGE_DIR}/tools/deck-persistent-uninstall.sh"
     DEPENDS bootstp_bridge azazel_input_hook aim_filter_test proxy_smoke_test IsaacInputInjector IsaacInputLauncher IsaacInputPatcher IsaacInputUnpatcher
   )
 endif()

@@ -14,7 +14,12 @@
 4. 若 EXE 中的动态库名仍为 `userenv`，安装器创建 `isaac-ng.exe.cofix-original` 并把这个唯一字符串等长改为 `bootstp`；若汉化补丁已经完成该改动，则不再修改 EXE，而是保存并链式调用其现有 `bootstp.dll`。
 5. 此后直接从 Steam 启动游戏。兼容桥会先调用原有汉化 bootstrap（如有），否则转发系统 `userenv.dll`，再加载输入过滤 DLL。
 
-安装器不分发汉化补丁代码或二进制。检测到其 `bootstp.dll` 时，会在本机保存为 `cofix_bootstrap_chain.dll` 并保持原有调用顺序；`inject.dll` 和 `language_unlocker.dll` 不会被修改。
+安装器不分发汉化补丁代码或二进制。检测到其 `bootstp.dll` 时，会在本机保存为 `cofix_bootstrap_chain.dll` 并保持原有调用顺序；`inject.dll` 和 `language_unlocker.dll` 不会被修改。安装标记会记录补丁后 EXE 的 SHA-256；卸载时如果 EXE 已被 Steam 更新或其他程序改动，工具会拒绝继续操作。
+
+Steam Deck 可以使用 `DEPLOYMENT_STEAM_DECK.md` 中的
+`tools/deck-persistent-install.sh`，从 Desktop Mode 的 SSH 连接完成一次安装。
+安装后从原 Steam 条目启动 Isaac 即可，不需要每局手动注入；Steam 更新替换
+`isaac-ng.exe` 后需要重新运行安装脚本。
 
 ## 卸载
 

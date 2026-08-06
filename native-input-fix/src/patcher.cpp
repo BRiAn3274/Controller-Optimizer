@@ -47,6 +47,53 @@ bool WriteFile(const std::wstring& path, const std::vector<BYTE>& bytes) {
     return true;
 }
 
+bool ReadTextFile(const std::wstring& path, std::string& text) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) return false;
+    const std::streamsize size = file.tellg();
+    if (size < 0 || size > 1024 * 1024) return false;
+    text.resize(static_cast<size_t>(size));
+    file.seekg(0);
+    return static_cast<bool>(file.read(text.data(), size));
+}
+
+bool ReadInstalledHash(const std::wstring& marker, std::string& hash, bool& hasHashField) {
+    hasHashField = false;
+    std::string text;
+    if (!ReadTextFile(marker, text)) return false;
+    constexpr char prefix[] = "patched_sha256=";
+    size_t lineStart = 0;
+    while (lineStart < text.size()) {
+        size_t lineEnd = text.find('\n', lineStart);
+        if (lineEnd == std::string::npos) lineEnd = text.size();
+        std::string line = text.substr(lineStart, lineEnd - lineStart);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind(prefix, 0) == 0) {
+            hasHashField = true;
+            hash = line.substr(sizeof(prefix) - 1);
+            return hash.size() == 64;
+        }
+        lineStart = lineEnd == text.size() ? text.size() : lineEnd + 1;
+    }
+    return true; // Legacy v1 markers did not contain a hash.
+}
+
+bool MatchesInstalledHash(const std::wstring& executable, const std::wstring& marker,
+    bool& hasInstalledHash) {
+    hasInstalledHash = false;
+    std::string expected;
+    bool hasHashField{};
+    if (!ReadInstalledHash(marker, expected, hasHashField)) {
+        hasInstalledHash = hasHashField;
+        return false;
+    }
+    if (!hasHashField) return true; // Backward-compatible with the v1 marker.
+    hasInstalledHash = true;
+    std::wstring actual;
+    if (!inif::Sha256File(executable, actual)) return false;
+    return _stricmp(expected.c_str(), inif::Narrow(actual).c_str()) == 0;
+}
+
 bool CopyFileAtomic(const std::wstring& source, const std::wstring& target) {
     const std::wstring temporary = target + L".cofix.tmp";
     DeleteFileW(temporary.c_str());
@@ -156,6 +203,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         Notify(L"The automatic loader is not installed in this executable.", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
+    bool hasInstalledHash{};
+    if (!MatchesInstalledHash(executable, owner, hasInstalledHash)) {
+        Notify(hasInstalledHash
+            ? L"isaac-ng.exe changed after installation, probably because Steam updated the game.\n\nNothing was removed. Reinstall or use Steam's file verification first."
+            : L"The loader ownership marker is incomplete. Nothing was removed.",
+            MB_OK | MB_ICONWARNING);
+        return 4;
+    }
     if (inif::FileExists(chain)) {
         if (!CopyFileAtomic(chain, bridge)) {
             Notify(L"Could not restore the pre-existing bootstp.dll. Nothing was removed.",
@@ -192,15 +247,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     const bool refreshingOwnedBridge = inif::FileExists(owner);
     bool chainCreated{};
-    if (state == PatchState::Ready && refreshingOwnedBridge) {
-        Notify(L"Loader metadata exists but isaac-ng.exe is no longer patched. Nothing was changed.",
-            MB_OK | MB_ICONERROR);
-        return 5;
-    }
     if (state == PatchState::Ready && inif::FileExists(bridge)) {
-        Notify(L"A bootstp.dll exists although Isaac still names userenv. Nothing was overwritten.",
-            MB_OK | MB_ICONERROR);
-        return 5;
+        if (!refreshingOwnedBridge) {
+            Notify(L"A bootstp.dll exists although Isaac still names userenv. Nothing was overwritten.",
+                MB_OK | MB_ICONERROR);
+            return 5;
+        }
     }
     if (state == PatchState::AlreadyInstalled && !refreshingOwnedBridge) {
         if (!inif::FileExists(bridge) || inif::FileExists(chain) ||
@@ -223,7 +275,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     if (state == PatchState::Ready) {
         const std::wstring backup = executable + L".cofix-original";
-        if (!inif::FileExists(backup) && !CopyFileW(executable.c_str(), backup.c_str(), TRUE)) {
+        if ((refreshingOwnedBridge || !inif::FileExists(backup)) &&
+            !CopyFileAtomic(executable, backup)) {
             DeleteFileW(bridge.c_str());
             DeleteFileW(payload.c_str());
             Notify(L"Could not create the original executable backup. No changes were made.", MB_OK | MB_ICONERROR);
@@ -237,7 +290,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             return 8;
         }
     }
-    if (!inif::WriteTextAtomic(owner, "Controller Optimizer bootstrap bridge\r\n")) {
+    std::wstring installedHash;
+    if (!inif::Sha256File(executable, installedHash) ||
+        !inif::WriteTextAtomic(owner,
+            "version=2\r\n"
+            "patched_sha256=" + inif::Narrow(installedHash) + "\r\n"
+            "loader=bootstp\r\n")) {
         if (chainCreated) {
             CopyFileAtomic(chain, bridge);
             DeleteFileW(chain.c_str());
