@@ -388,7 +388,7 @@ local function registerModConfigMenu()
             end,
             Info = {
                 "Leaves native shooting input untouched for Eye of the Occult, Soy Milk,",
-                "The Marked, and Cursed Eye.",
+                "and The Marked.",
                 "Prevents Brimstone aim from being reduced to four directions by this mod.",
             },
         }
@@ -543,13 +543,6 @@ local function getMarkedId()
         return CollectibleType.COLLECTIBLE_MARKED
     end
     return 331
-end
-
-local function getCursedEyeId()
-    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_CURSED_EYE ~= nil then
-        return CollectibleType.COLLECTIBLE_CURSED_EYE
-    end
-    return 316
 end
 
 local function getAnalogStickId()
@@ -1105,8 +1098,7 @@ local function hasAttackShapePassThrough(player)
     return Config.AttackShapePassThrough and
         (playerHasCollectible(player, getEyeOfTheOccultId()) or
         playerHasCollectible(player, getSoyMilkId()) or
-        playerHasCollectible(player, getMarkedId()) or
-        playerHasCollectible(player, getCursedEyeId()))
+        playerHasCollectible(player, getMarkedId()))
 end
 
 local function hasAnalogStickAim(player)

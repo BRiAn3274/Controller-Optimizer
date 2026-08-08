@@ -36,7 +36,6 @@ ButtonAction = {
 CollectibleType = {
     COLLECTIBLE_ANALOG_STICK = 465,
     COLLECTIBLE_EYE_OF_THE_OCCULT = 572,
-    COLLECTIBLE_CURSED_EYE = 316,
     COLLECTIBLE_SOY_MILK = 330,
     COLLECTIBLE_MARKED = 331,
     COLLECTIBLE_MARS = 609,
@@ -354,7 +353,6 @@ assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), ni
 for index, collectible in ipairs({
     CollectibleType.COLLECTIBLE_SOY_MILK,
     CollectibleType.COLLECTIBLE_MARKED,
-    CollectibleType.COLLECTIBLE_CURSED_EYE,
 }) do
     reset(101 + index)
     player.collectibles[collectible] = true

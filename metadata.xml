@@ -72,7 +72,7 @@ When the Analog Stick item is held, the mod preserves the complete normalized 36
 
 [b]Attack-shape item compatibility[/b]
 
-When holding Eye of the Occult, Soy Milk, The Marked, or Cursed Eye with Brimstone, Controller Optimizer leaves all shooting input native. These items change aim ownership or firing cadence, so pass-through preserves their full 360-degree behavior.
+When holding Eye of the Occult, Soy Milk, or The Marked with Brimstone, Controller Optimizer leaves all shooting input native. These items change aim ownership or firing cadence, so pass-through preserves their full 360-degree behavior.
 
 [b]Compatibility principles[/b]
 
@@ -80,7 +80,7 @@ The mod only filters input values. It does not directly create Hemoptysis, Brims
 
 Ordinary Brimstone keeps native pressed and triggered states. Familiar release compatibility is input-only and limited to the original Lil Brimstone and Lil Monstro. Unrelated and custom familiars are left untouched. Mars keeps native held movement state, and Schoolbag quick swap requires the real collectible, two occupied slots, and an unambiguous controller target.
 
-Version 1.7.1 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Cursed Eye, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
+Version 1.7.1 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
 
 [h2]Notes[/h2]
 
