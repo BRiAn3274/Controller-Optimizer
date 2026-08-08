@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.1 - 2026-08-08
+
+- Pass through all shooting input when a Brimstone player holds Eye of the
+  Occult, Soy Milk, The Marked, or Cursed Eye. These items own aiming or firing
+  cadence, so Controller Optimizer must not reduce their native 360-degree
+  input to cardinal Brimstone directions.
+- Add an MCM toggle for attack-shape item pass-through, enabled by default.
+- Clear per-player filtering state immediately when the compatibility path is
+  entered, preventing a previous cardinal direction from leaking into native aim.
+
 ## 1.7.0 - 2026-07-20
 
 - Remove all player-laser entity inspection and lifetime mutation. Familiar

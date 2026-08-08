@@ -1,5 +1,5 @@
 local MOD_NAME = "Controller Optimizer"
-local VERSION = "1.7.0"
+local VERSION = "1.7.1"
 local mod = RegisterMod(MOD_NAME, 1)
 local IS_REPENTANCE_PLUS = REPENTANCE_PLUS == true
 
@@ -18,7 +18,9 @@ local Config = {
 
     -- 保持开启可降低兼容风险：普通眼泪射击不会被 Brimstone 保持逻辑接管。
     OnlyBrimstoneTargets = true,
-    EyeOfTheOccultPassThrough = true,
+    -- 会接管瞄准、蓄力或射击节奏的道具必须完整放行，不能把它们的连续
+    -- 360° 输入重新编码成 Brimstone 的四向数字输出。
+    AttackShapePassThrough = true,
     -- Analog Stick 保留完整二维方向；只滤除死区、回中和回弹，不再吸附到四方向。
     AnalogStick360Enabled = true,
 
@@ -239,6 +241,7 @@ local function appendDiagnosticState(reason)
         " version=" .. VERSION ..
         " repentancePlus=" .. encodeBool(IS_REPENTANCE_PLUS) ..
         " enabled=" .. encodeBool(Config.Enabled) ..
+        " attackShapePassThrough=" .. encodeBool(Config.AttackShapePassThrough) ..
         " analog360=" .. encodeBool(Config.AnalogStick360Enabled) ..
         " taintedAzazel=" .. encodeBool(Config.TaintedAzazelInputFix) ..
         " mars=" .. encodeBool(Config.MarsAnalogGuardEnabled) ..
@@ -267,6 +270,7 @@ local function saveSettings()
     mod:SaveData(
         "version=" .. VERSION .. "\n" ..
         "Enabled=" .. encodeBool(Config.Enabled) .. "\n" ..
+        "AttackShapePassThrough=" .. encodeBool(Config.AttackShapePassThrough) .. "\n" ..
         "TaintedAzazelInputFix=" .. encodeBool(Config.TaintedAzazelInputFix) .. "\n" ..
         "MarsAnalogGuardEnabled=" .. encodeBool(Config.MarsAnalogGuardEnabled) .. "\n" ..
         "ActiveSwapEnabled=" .. encodeBool(Config.ActiveSwapEnabled) .. "\n" ..
@@ -288,6 +292,8 @@ local function loadSettings()
         local key, value = string.match(line, "^([^=]+)=(.*)$")
         if key == "Enabled" then
             Config.Enabled = decodeBool(value, Config.Enabled)
+        elseif key == "AttackShapePassThrough" then
+            Config.AttackShapePassThrough = decodeBool(value, Config.AttackShapePassThrough)
         elseif key == "TaintedAzazelInputFix" then
             Config.TaintedAzazelInputFix = decodeBool(value, Config.TaintedAzazelInputFix)
         elseif key == "MarsAnalogGuardEnabled" then
@@ -358,6 +364,32 @@ local function registerModConfigMenu()
             end,
             Info = {
                 "Master switch for all controller stick optimizations.",
+            },
+        }
+    )
+
+    ModConfigMenu.AddSetting(
+        MOD_NAME,
+        "General",
+        {
+            Type = ModConfigMenu.OptionType.BOOLEAN,
+            CurrentSetting = function()
+                return Config.AttackShapePassThrough
+            end,
+            Display = function()
+                return "Attack-shape item pass-through: " ..
+                    (Config.AttackShapePassThrough and "on" or "off")
+            end,
+            OnChange = function(value)
+                Config.AttackShapePassThrough = value
+                sanitizeConfig()
+                resetInputState()
+                saveSettings()
+            end,
+            Info = {
+                "Leaves native shooting input untouched for Eye of the Occult, Soy Milk,",
+                "The Marked, and Cursed Eye.",
+                "Prevents Brimstone aim from being reduced to four directions by this mod.",
             },
         }
     )
@@ -497,6 +529,27 @@ local function getEyeOfTheOccultId()
         return CollectibleType.COLLECTIBLE_EYE_OF_THE_OCCULT
     end
     return 572
+end
+
+local function getSoyMilkId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_SOY_MILK ~= nil then
+        return CollectibleType.COLLECTIBLE_SOY_MILK
+    end
+    return 330
+end
+
+local function getMarkedId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_MARKED ~= nil then
+        return CollectibleType.COLLECTIBLE_MARKED
+    end
+    return 331
+end
+
+local function getCursedEyeId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_CURSED_EYE ~= nil then
+        return CollectibleType.COLLECTIBLE_CURSED_EYE
+    end
+    return 316
 end
 
 local function getAnalogStickId()
@@ -1048,9 +1101,12 @@ local function isTaintedAzazel(player)
         player:GetPlayerType() == PlayerType.PLAYER_AZAZEL_B
 end
 
-local function hasEyeOfTheOccultPassThrough(player)
-    return Config.EyeOfTheOccultPassThrough and
-        playerHasCollectible(player, getEyeOfTheOccultId())
+local function hasAttackShapePassThrough(player)
+    return Config.AttackShapePassThrough and
+        (playerHasCollectible(player, getEyeOfTheOccultId()) or
+        playerHasCollectible(player, getSoyMilkId()) or
+        playerHasCollectible(player, getMarkedId()) or
+        playerHasCollectible(player, getCursedEyeId()))
 end
 
 local function hasAnalogStickAim(player)
@@ -1059,7 +1115,7 @@ local function hasAnalogStickAim(player)
 end
 
 local function shouldFilterShootInput(player)
-    if hasEyeOfTheOccultPassThrough(player) then
+    if hasAttackShapePassThrough(player) then
         return false
     end
     return isBrimstoneFilterTarget(player)
@@ -1650,6 +1706,12 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
         if hasMarsAnalogGuard(player) then
             return getMarsAnalogGuardValue(state, controllerIndex, buttonAction)
         end
+        return nil
+    end
+
+    if hasAttackShapePassThrough(player) then
+        clearShootFilterState(player)
+        logSkip("attack-shape item pass-through", player.ControllerIndex)
         return nil
     end
 

@@ -36,6 +36,9 @@ ButtonAction = {
 CollectibleType = {
     COLLECTIBLE_ANALOG_STICK = 465,
     COLLECTIBLE_EYE_OF_THE_OCCULT = 572,
+    COLLECTIBLE_CURSED_EYE = 316,
+    COLLECTIBLE_SOY_MILK = 330,
+    COLLECTIBLE_MARKED = 331,
     COLLECTIBLE_MARS = 609,
     COLLECTIBLE_SCHOOLBAG = 534,
 }
@@ -343,11 +346,26 @@ frame = 44
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "next attack is not guarded")
 
--- Eye of the Occult 仍完全放行，非 Brimstone 玩家也不接管。
+-- 改变攻击形态的道具必须完整放行；否则数字输出会把原生 360° 瞄准锁成四向。
 reset(100)
 player.collectibles[CollectibleType.COLLECTIBLE_EYE_OF_THE_OCCULT] = true
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "occult pass-through")
+for index, collectible in ipairs({
+    CollectibleType.COLLECTIBLE_SOY_MILK,
+    CollectibleType.COLLECTIBLE_MARKED,
+    CollectibleType.COLLECTIBLE_CURSED_EYE,
+}) do
+    reset(101 + index)
+    player.collectibles[collectible] = true
+    setStick(0.8, 0.6)
+    assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil,
+        "attack-shape pass-through right " .. tostring(collectible))
+    assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), nil,
+        "attack-shape pass-through down " .. tostring(collectible))
+    assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil,
+        "attack-shape pass-through pressed " .. tostring(collectible))
+end
 reset(101)
 player.brimstone = false
 setStick(1, 0)
