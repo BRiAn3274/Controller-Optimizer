@@ -14,7 +14,7 @@ remote: https://github.com/BRiAn3274/Controller-Optimizer.git
 
 为《The Binding of Isaac: Repentance+》提供手柄输入修复和优化。原项目目录已于 2026-07-19 从桌面迁入 Vibe。
 
-当前开发版本为 1.7.1。后续维护以“只修正游戏读取到的输入，不生成攻击、不修改攻击实体”为边界。
+当前开发版本为 1.7.2。后续维护以“只修正游戏读取到的输入，不生成攻击、不修改攻击实体”为边界。
 
 ## 检查命令
 

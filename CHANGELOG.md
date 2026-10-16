@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.7.2 - 2026-10-16
+
+- Add Ludovico Technique to attack-shape pass-through so Brimstone and Tainted
+  Azazel keep native continuous aiming on all shooting input hooks.
+- Remove the Mars analog movement value cap of 0.95. Movement values and held
+  states now remain native; analog dash trigger suppression is retained.
+- Correct The Marked fallback collectible ID from 331 (Godhead) to 394.
+- Clear Schoolbag button history when swap eligibility is lost or the controller
+  target becomes ambiguous, avoiding a delayed swap when eligibility returns.
+- Avoid repeatedly resetting shooting state while an attack-shape item keeps
+  input in pass-through mode.
+- Add full-circle Ludovico, movement-vector, collectible fallback, and Schoolbag
+  eligibility regression coverage. In-game verification is still pending.
+
 ## 1.7.1 - 2026-08-08
 
 - Pass through all shooting input when a Brimstone player holds Eye of the

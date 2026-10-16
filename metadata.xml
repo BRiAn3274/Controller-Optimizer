@@ -29,7 +29,15 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [h2]Current Version[/h2]
 
-[h2]Version 1.7.1 - Attack-shape compatibility[/h2]
+[h2]Version 1.7.2 - Ludovico and controller input compatibility[/h2]
+
+[list]
+[*]Added Ludovico Technique to attack-shape pass-through, preserving native continuous aiming when combined with Brimstone.
+[*]Removed the Mars movement input cap of 0.95. Movement strength remains native while analog dash trigger suppression is retained.
+[*]Corrected The Marked fallback collectible ID.
+[*]Fixed a delayed Schoolbag swap after swap eligibility was temporarily lost.
+[*]Avoided redundant shooting-state resets during attack-shape pass-through.
+[/list]
 
 [b]Compatibility boundary[/b]
 
@@ -72,7 +80,7 @@ When the Analog Stick item is held, the mod preserves the complete normalized 36
 
 [b]Attack-shape item compatibility[/b]
 
-When holding Eye of the Occult, Soy Milk, or The Marked with Brimstone, Controller Optimizer leaves all shooting input native. These items change aim ownership or firing cadence, so pass-through preserves their full 360-degree behavior.
+When holding Eye of the Occult, Soy Milk, The Marked, or Ludovico Technique with Brimstone, Controller Optimizer leaves all shooting input native. These items change aim ownership or firing cadence, so pass-through preserves their full 360-degree behavior.
 
 [b]Compatibility principles[/b]
 
@@ -80,7 +88,7 @@ The mod only filters input values. It does not directly create Hemoptysis, Brims
 
 Ordinary Brimstone keeps native pressed and triggered states. Familiar release compatibility is input-only and limited to the original Lil Brimstone and Lil Monstro. Unrelated and custom familiars are left untouched. Mars keeps native held movement state, and Schoolbag quick swap requires the real collectible, two occupied slots, and an unambiguous controller target.
 
-Version 1.7.1 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
+Version 1.7.2 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Ludovico Technique, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
 
 [h2]Notes[/h2]
 
@@ -95,7 +103,7 @@ I will continue maintaining this mod, but updates will be less frequent than bef
 The original purpose of this mod is simply to improve the controller experience before the related Repentance+ issues are officially fixed.
 
 Hopefully, controller players will eventually be able to fire Brimstone smoothly with the analog stick even without this mod.</description>
-    <version>1.7.1</version>
+    <version>1.7.2</version>
     <visibility>Public</visibility>
     <tag id="Lua"/>
     <tag id="Tweaks"/>

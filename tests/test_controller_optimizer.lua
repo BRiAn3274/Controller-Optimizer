@@ -37,7 +37,8 @@ CollectibleType = {
     COLLECTIBLE_ANALOG_STICK = 465,
     COLLECTIBLE_EYE_OF_THE_OCCULT = 572,
     COLLECTIBLE_SOY_MILK = 330,
-    COLLECTIBLE_MARKED = 331,
+    COLLECTIBLE_LUDOVICO_TECHNIQUE = 329,
+    COLLECTIBLE_MARKED = 394,
     COLLECTIBLE_MARS = 609,
     COLLECTIBLE_SCHOOLBAG = 534,
 }
@@ -369,6 +370,33 @@ player.brimstone = false
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "non-brimstone pass-through")
 
+-- Ludovico 接管连续瞄准：普通硫磺火与里阿撒泻勒的全部射击 Hook 都应原生。
+for _, playerType in ipairs({ 0, PlayerType.PLAYER_AZAZEL_B }) do
+    reset(105)
+    player.playerType = playerType
+    setStick(1, 0)
+    poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT)
+    player.collectibles[CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE] = true
+    for step = 0, 23 do
+        frame = frame + 1
+        local angle = step * math.pi / 12
+        setStick(0.8 * math.cos(angle), 0.8 * math.sin(angle))
+        for _, hook in ipairs({ InputHook.GET_ACTION_VALUE, InputHook.IS_ACTION_PRESSED,
+            InputHook.IS_ACTION_TRIGGERED }) do
+            for _, action in ipairs({ ButtonAction.ACTION_SHOOTLEFT, ButtonAction.ACTION_SHOOTRIGHT,
+                ButtonAction.ACTION_SHOOTUP, ButtonAction.ACTION_SHOOTDOWN }) do
+                assertEqual(poll(hook, action), nil, "Ludovico native aim after pickup")
+            end
+        end
+    end
+    player.collectibles[CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE] = nil
+    player.playerType = 0
+    frame = frame + 1
+    setStick(0, 1)
+    assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), 1,
+        "filter resumes without stale direction after Ludovico removal")
+end
+
 -- 普通或 modded 跟班必须完全放行，不能改变玩家本体的释放窗口。
 reset(110)
 worldFamiliars = {
@@ -404,9 +432,32 @@ setActionValue(ButtonAction.ACTION_RIGHT, 0.5)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_RIGHT), nil, "mars observes analog mid")
 frame = 141
 setActionValue(ButtonAction.ACTION_RIGHT, 0.99)
-assertClose(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_RIGHT), 0.95, 0.0001, "mars caps analog peak")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_RIGHT), nil, "mars preserves analog peak")
 assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_RIGHT), false, "mars suppresses analog trigger")
 assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_RIGHT), nil, "mars pressed remains native")
+
+-- 经过中间行程后整圈满推：GET_ACTION_VALUE/pressed 不应被削减，包括近轴斜向。
+for _, withMars in ipairs({ false, true }) do
+    for step = 0, 71 do
+        reset(142)
+        player.collectibles[CollectibleType.COLLECTIBLE_MARS] = withMars
+        local angle = step * math.pi / 36
+        local x, y = math.cos(angle), math.sin(angle)
+        for _, scale in ipairs({ 0.5, 1, 1 }) do
+            frame = frame + 1
+            setActionValue(ButtonAction.ACTION_LEFT, math.max(-x, 0) * scale)
+            setActionValue(ButtonAction.ACTION_RIGHT, math.max(x, 0) * scale)
+            setActionValue(ButtonAction.ACTION_UP, math.max(-y, 0) * scale)
+            setActionValue(ButtonAction.ACTION_DOWN, math.max(y, 0) * scale)
+            for _, action in ipairs({ ButtonAction.ACTION_LEFT, ButtonAction.ACTION_RIGHT,
+                ButtonAction.ACTION_UP, ButtonAction.ACTION_DOWN }) do
+                assertEqual(poll(InputHook.GET_ACTION_VALUE, action), nil, "full movement vector stays native")
+                assertEqual(poll(InputHook.IS_ACTION_PRESSED, action), nil, "movement held stays native")
+                poll(InputHook.IS_ACTION_TRIGGERED, action)
+            end
+        end
+    end
+end
 
 -- 书包快捷交换默认开启，但仍必须持有 Schoolbag 且目标角色唯一。
 reset(150)
@@ -453,6 +504,21 @@ setButton(13, false)
 registeredMod:OnPostUpdate()
 assertEqual(player.swapCount, 0, "shared controller does not guess first player")
 assertEqual(sharedPlayer.swapCount, 0, "shared controller does not guess second player")
+
+-- 失去书包条件期间的松手不能在条件恢复后补执行一次切换。
+reset(172)
+player.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = true
+player.activeItems = { [0] = 100, [1] = 200 }
+setButton(13, true)
+registeredMod:OnPostUpdate()
+frame = 173
+player.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = nil
+setButton(13, false)
+registeredMod:OnPostUpdate()
+frame = 174
+player.collectibles[CollectibleType.COLLECTIBLE_SCHOOLBAG] = true
+registeredMod:OnPostUpdate()
+assertEqual(player.swapCount, 0, "schoolbag does not replay stale release")
 
 -- 同一手柄控制多个角色时，每个 player 保持独立射击状态，不能互相重置配置。
 reset(180)
@@ -671,6 +737,27 @@ player.playerType = PlayerType.PLAYER_AZAZEL_B
 setStick(1, 0)
 assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), nil, "repentance keeps native trigger")
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "repentance keeps generic filter")
+
+-- Ludovico 的枚举缺失时，仍能通过原版物品 ID 完整放行。
+CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE = nil
+dofile("main.lua")
+reset(510)
+player.collectibles[329] = true
+setStick(0.6, 0.8)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "Ludovico fallback right")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), nil, "Ludovico fallback down")
+
+-- 十字准星枚举缺失时使用正确 ID，不能误把 Godhead 当成十字准星。
+CollectibleType.COLLECTIBLE_MARKED = nil
+dofile("main.lua")
+reset(511)
+player.collectibles[394] = true
+setStick(0.8, 0.6)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), nil, "Marked fallback pass-through")
+reset(512)
+player.collectibles[331] = true
+setStick(0.8, 0.6)
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "Godhead keeps Brimstone filtering")
 
 -- 可选的移动、轮询和生命周期 API 缺失时，核心射击滤波仍应正常加载。
 REPENTANCE_PLUS = true

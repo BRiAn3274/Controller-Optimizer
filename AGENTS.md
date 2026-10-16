@@ -34,7 +34,7 @@ Controller Optimizer 是《以撒的结合：忏悔+》的 Lua 创意工坊 Mod�
 - GitHub 仓库：<https://github.com/BRiAn3274/Controller-Optimizer>
 - Steam Workshop 条目：`3731198516`
 - Steam App ID：`250900`
-- 当前开发版本：`1.7.1`
+- 当前开发版本：`1.7.2`
 
 ## 4. 仓库文件
 

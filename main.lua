@@ -1,5 +1,5 @@
 local MOD_NAME = "Controller Optimizer"
-local VERSION = "1.7.1"
+local VERSION = "1.7.2"
 local mod = RegisterMod(MOD_NAME, 1)
 local IS_REPENTANCE_PLUS = REPENTANCE_PLUS == true
 
@@ -59,7 +59,6 @@ local Config = {
     MarsAnalogMidMax = 0.92,
     MarsDigitalPressValue = 0.98,
     MarsReleaseValue = 0.08,
-    MarsAnalogValueCap = 0.95,
     MarsAnalogTriggerMemoryFrames = 10,
 
     -- 书包切换只在真实持有 Schoolbag、两个主动槽都非空且目标角色唯一时执行。
@@ -212,7 +211,6 @@ local function sanitizeConfig()
     Config.MarsAnalogMidMax = clampNumber(Config.MarsAnalogMidMax, Config.MarsAnalogMidMin, 0.99, 0.92)
     Config.MarsDigitalPressValue = clampNumber(Config.MarsDigitalPressValue, Config.MarsAnalogMidMax, 1, 0.98)
     Config.MarsReleaseValue = clampNumber(Config.MarsReleaseValue, 0, Config.MarsAnalogMidMin, 0.08)
-    Config.MarsAnalogValueCap = clampNumber(Config.MarsAnalogValueCap, 0.50, 0.99, 0.95)
     Config.MarsAnalogTriggerMemoryFrames = clampInteger(Config.MarsAnalogTriggerMemoryFrames, 0, 30, 10)
     Config.ActiveSwapControllerButton = clampInteger(
         Config.ActiveSwapControllerButton,
@@ -388,7 +386,7 @@ local function registerModConfigMenu()
             end,
             Info = {
                 "Leaves native shooting input untouched for Eye of the Occult, Soy Milk,",
-                "and The Marked.",
+                "The Marked, and Ludovico Technique.",
                 "Prevents Brimstone aim from being reduced to four directions by this mod.",
             },
         }
@@ -542,7 +540,14 @@ local function getMarkedId()
     if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_MARKED ~= nil then
         return CollectibleType.COLLECTIBLE_MARKED
     end
-    return 331
+    return 394
+end
+
+local function getLudovicoTechniqueId()
+    if CollectibleType ~= nil and CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE ~= nil then
+        return CollectibleType.COLLECTIBLE_LUDOVICO_TECHNIQUE
+    end
+    return 329
 end
 
 local function getAnalogStickId()
@@ -705,6 +710,9 @@ end
 local function checkActiveSwapInput()
     if not Config.Enabled or not Config.ActiveSwapEnabled or
         Input == nil or Input.IsButtonPressed == nil or type(Game) ~= "function" then
+        for controllerIndex in pairs(activeSwapButtonStateByController) do
+            activeSwapButtonStateByController[controllerIndex] = nil
+        end
         return
     end
 
@@ -740,6 +748,14 @@ local function checkActiveSwapInput()
                 playersByController[controllerIndex] = candidates
             end
             table.insert(candidates, player)
+        end
+    end
+
+    -- 条件失效或目标不唯一时丢弃按键历史，防止恢复后补执行旧的松手。
+    for controllerIndex in pairs(activeSwapButtonStateByController) do
+        local candidates = playersByController[controllerIndex]
+        if candidates == nil or #candidates ~= 1 then
+            activeSwapButtonStateByController[controllerIndex] = nil
         end
     end
 
@@ -869,10 +885,6 @@ local function getPlayerState(player)
             releaseReason = "none",
             mars = {
                 frame = -1,
-                outLeft = nil,
-                outRight = nil,
-                outUp = nil,
-                outDown = nil,
                 dirs = {
                     left = {
                         active = false,
@@ -1098,7 +1110,8 @@ local function hasAttackShapePassThrough(player)
     return Config.AttackShapePassThrough and
         (playerHasCollectible(player, getEyeOfTheOccultId()) or
         playerHasCollectible(player, getSoyMilkId()) or
-        playerHasCollectible(player, getMarkedId()))
+        playerHasCollectible(player, getMarkedId()) or
+        playerHasCollectible(player, getLudovicoTechniqueId()))
 end
 
 local function hasAnalogStickAim(player)
@@ -1116,7 +1129,7 @@ end
 local function clearShootFilterState(player)
     local playerKey = getStablePlayerKey(player)
     local state = playerKey ~= nil and stateByPlayerKey[playerKey] or nil
-    if state == nil then
+    if state == nil or state.releaseReason == "passThrough" then
         return
     end
 
@@ -1136,7 +1149,7 @@ end
 -- ============================================================
 -- Mars 的双击移动触发会受到左摇杆线性行程影响。这里尝试识别
 -- 模拟摇杆的中间值轨迹，只抑制会启动冲刺的 triggered 边沿；pressed
--- 始终返回 nil，避免影响依赖持续移动状态的其他 mod。
+-- 与 GET_ACTION_VALUE 始终返回 nil，保留原生移动幅度，避免影响满速与斜向。
 local function hasMarsAnalogGuard(player)
     if not Config.MarsAnalogGuardEnabled or CollectibleType == nil then
         return false
@@ -1161,17 +1174,13 @@ local function refreshMarsAnalogGuard(state, controllerIndex)
     end
 
     mars.frame = frame
-    mars.outLeft = nil
-    mars.outRight = nil
-    mars.outUp = nil
-    mars.outDown = nil
 
     local leftValue = rawActionValue(ButtonAction.ACTION_LEFT, controllerIndex)
     local rightValue = rawActionValue(ButtonAction.ACTION_RIGHT, controllerIndex)
     local upValue = rawActionValue(ButtonAction.ACTION_UP, controllerIndex)
     local downValue = rawActionValue(ButtonAction.ACTION_DOWN, controllerIndex)
     local directions = mars.dirs
-    local function updateDirection(dirState, value, action)
+    local function updateDirection(dirState, value)
         if value >= Config.MarsAnalogMidMin and value <= Config.MarsAnalogMidMax then
             dirState.sawAnalogMid = true
             dirState.lastAnalogFrame = frame
@@ -1189,40 +1198,12 @@ local function refreshMarsAnalogGuard(state, controllerIndex)
             dirState.analogPress = false
             dirState.sawAnalogMid = false
         end
-
-        if (dirState.analogPress or dirState.sawAnalogMid) and value > Config.MarsAnalogValueCap then
-            if action == ButtonAction.ACTION_LEFT then
-                mars.outLeft = Config.MarsAnalogValueCap
-            elseif action == ButtonAction.ACTION_RIGHT then
-                mars.outRight = Config.MarsAnalogValueCap
-            elseif action == ButtonAction.ACTION_UP then
-                mars.outUp = Config.MarsAnalogValueCap
-            elseif action == ButtonAction.ACTION_DOWN then
-                mars.outDown = Config.MarsAnalogValueCap
-            end
-        end
     end
 
-    updateDirection(directions.left, leftValue, ButtonAction.ACTION_LEFT)
-    updateDirection(directions.right, rightValue, ButtonAction.ACTION_RIGHT)
-    updateDirection(directions.up, upValue, ButtonAction.ACTION_UP)
-    updateDirection(directions.down, downValue, ButtonAction.ACTION_DOWN)
-end
-
-local function getMarsAnalogGuardValue(state, controllerIndex, buttonAction)
-    refreshMarsAnalogGuard(state, controllerIndex)
-
-    if buttonAction == ButtonAction.ACTION_LEFT then
-        return state.mars.outLeft
-    elseif buttonAction == ButtonAction.ACTION_RIGHT then
-        return state.mars.outRight
-    elseif buttonAction == ButtonAction.ACTION_UP then
-        return state.mars.outUp
-    elseif buttonAction == ButtonAction.ACTION_DOWN then
-        return state.mars.outDown
-    end
-
-    return nil
+    updateDirection(directions.left, leftValue)
+    updateDirection(directions.right, rightValue)
+    updateDirection(directions.up, upValue)
+    updateDirection(directions.down, downValue)
 end
 
 local function getMoveDirectionName(buttonAction)
@@ -1696,7 +1677,8 @@ function mod:OnInputAction(entity, inputHook, buttonAction)
             return nil
         end
         if hasMarsAnalogGuard(player) then
-            return getMarsAnalogGuardValue(state, controllerIndex, buttonAction)
+            -- 继续观察模拟轨迹供 triggered 防护使用，但不改写移动幅度。
+            refreshMarsAnalogGuard(state, controllerIndex)
         end
         return nil
     end

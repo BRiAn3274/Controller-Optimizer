@@ -1,0 +1,7 @@
+Version 1.7.2 - Ludovico and controller input compatibility
+
+- Added Ludovico Technique to attack-shape pass-through, preserving native continuous aiming with Brimstone.
+- Removed the Mars movement input cap of 0.95; native movement strength is preserved while analog dash trigger suppression is retained.
+- Corrected The Marked fallback collectible ID.
+- Fixed a delayed Schoolbag swap after swap eligibility was temporarily lost.
+- Reduced redundant state resets during attack-shape pass-through.
