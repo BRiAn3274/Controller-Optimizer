@@ -1,0 +1,7 @@
+Version 1.7.3 - Brimstone partial-stick input handling
+
+- Updated ordinary Brimstone input handling in Repentance+ to keep direction, held input, and the initial trigger consistent while withdrawing the stick through partial travel.
+- A continuous stick gesture produces an initial trigger only; partial travel no longer falls back to native held or trigger input.
+- Kept the existing two-frame default center debounce and added explicit suppression of sub-threshold idle input.
+- Preserved attack-shape item pass-through, Analog Stick aiming, and Tainted Azazel's separate input sequence.
+- Added automated slow-withdrawal, partial-hold, release, dropout, turning, and shared-controller regression coverage. Gameplay verification is pending.

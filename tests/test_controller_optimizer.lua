@@ -228,13 +228,85 @@ local function assertClose(actual, expected, tolerance, label)
     end
 end
 
--- 普通 Brimstone 只修正方向值；pressed/triggered 保持原生，确保松手立即可见。
+-- 普通硫磺火：满推蓄力后逐渐收杆，方向、按住与触发必须保持同一手势。
+-- 只验证输入契约，不用假造游戏的激光/伤害逻辑来冒充实机验证。
+for _, direction in ipairs({
+    { x = 1, y = 0, action = ButtonAction.ACTION_SHOOTRIGHT },
+    { x = -1, y = 0, action = ButtonAction.ACTION_SHOOTLEFT },
+    { x = 0, y = 1, action = ButtonAction.ACTION_SHOOTDOWN },
+    { x = 0, y = -1, action = ButtonAction.ACTION_SHOOTUP },
+    { x = math.cos(math.rad(30)), y = math.sin(math.rad(30)), action = ButtonAction.ACTION_SHOOTRIGHT },
+}) do
+    reset(1)
+    setStick(direction.x, direction.y)
+    -- 先查 triggered，确认采样与游戏查询顺序无关。
+    assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, direction.action), true, "generic gesture starts once")
+    for _, strength in ipairs({ 1, 0.99, 0.95, 0.8, 0.6, 0.4, 0.34, 0.25, 0.21 }) do
+        frame = frame + 1
+        setStick(direction.x * strength, direction.y * strength)
+        assertEqual(poll(InputHook.IS_ACTION_PRESSED, direction.action), true, "slow withdrawal keeps charging")
+        assertEqual(poll(InputHook.GET_ACTION_VALUE, direction.action), 1, "slow withdrawal keeps direction")
+        for _, action in ipairs({ ButtonAction.ACTION_SHOOTLEFT, ButtonAction.ACTION_SHOOTRIGHT,
+            ButtonAction.ACTION_SHOOTUP, ButtonAction.ACTION_SHOOTDOWN }) do
+            assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, action), false, "withdrawal never restarts attack")
+            assertEqual(poll(InputHook.IS_ACTION_PRESSED, action), action == direction.action,
+                "held axes agree with filtered direction")
+        end
+    end
+    -- 停在中间行程，而非很快穿过它，也不能重复释放/触发。
+    for step = 1, 90 do
+        frame = frame + 1
+        setStick(direction.x * 0.55, direction.y * 0.55)
+        assertEqual(poll(InputHook.IS_ACTION_PRESSED, direction.action), true, "partial hold remains held")
+        assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, direction.action), false, "partial hold does not repeat")
+    end
+    -- 真实回中最多使用原有的两帧防抖，然后所有轴明确释放。
+    setStick(0, 0)
+    for step = 0, 2 do
+        frame = frame + 1
+        assertEqual(poll(InputHook.IS_ACTION_PRESSED, direction.action), step < 2, "bounded center release")
+        assertEqual(poll(InputHook.GET_ACTION_VALUE, direction.action), step < 2 and 1 or 0,
+            "release value matches held state")
+        assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, direction.action), false, "release never triggers")
+    end
+    -- 未达到进入门槛的残余输入不能漏给原生触发逻辑。
+    frame = frame + 1
+    setStick(-direction.x * 0.25, -direction.y * 0.25)
+    for _, action in ipairs({ ButtonAction.ACTION_SHOOTLEFT, ButtonAction.ACTION_SHOOTRIGHT,
+        ButtonAction.ACTION_SHOOTUP, ButtonAction.ACTION_SHOOTDOWN }) do
+        assertEqual(poll(InputHook.GET_ACTION_VALUE, action), 0, "idle residual value suppressed")
+        assertEqual(poll(InputHook.IS_ACTION_PRESSED, action), false, "idle residual held suppressed")
+        assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, action), false, "idle residual trigger suppressed")
+    end
+    frame = frame + 1
+    setStick(direction.x, direction.y)
+    assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, direction.action), true, "next gesture can start")
+end
+
+-- 单帧掉采样后恢复同方向，仍属于原手势；主动转向也不能制造第二次触发。
+reset(1)
+setStick(1, 0)
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), true, "generic dropout initial trigger")
+frame = 2
+setStick(0, 0)
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), true, "generic dropout held")
+frame = 3
+setStick(1, 0)
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), false, "generic dropout no retrigger")
+frame = 4
+setStick(0, 1)
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTDOWN), true, "generic can turn while charging")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), false, "generic old direction released on turn")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTDOWN), false, "generic turn no retrigger")
+
+-- 普通 Brimstone 的方向与按住状态保持一致。
+
 reset(1)
 setStick(0.8, 0.6)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "cardinal right")
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), 0, "cardinal down")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "pressed right native")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTDOWN), nil, "pressed down native")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), true, "pressed right follows direction")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTDOWN), false, "pressed down follows direction")
 
 -- Analog Stick 保留归一化后的完整 360° 向量。
 reset(10)
@@ -242,8 +314,8 @@ player.collectibles[CollectibleType.COLLECTIBLE_ANALOG_STICK] = true
 setStick(0.8, 0.6)
 assertClose(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0.8, 0.0001, "analog right")
 assertClose(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTDOWN), 0.6, 0.0001, "analog down")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "analog pressed right native")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTDOWN), nil, "analog pressed down native")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), true, "analog right held")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTDOWN), true, "analog down held")
 
 -- 绕完整一圈采样，360° 输出角度不能因四方向动作拆分而失真。
 for degrees = 0, 355, 5 do
@@ -261,6 +333,14 @@ for degrees = 0, 355, 5 do
     local dot = actualX * expectedX + actualY * expectedY
     if dot < 0.9999 then
         error("analog angle drift at " .. tostring(degrees) .. " degrees: dot=" .. tostring(dot))
+    end
+    for _, action in ipairs({ ButtonAction.ACTION_SHOOTLEFT, ButtonAction.ACTION_SHOOTRIGHT,
+        ButtonAction.ACTION_SHOOTUP, ButtonAction.ACTION_SHOOTDOWN }) do
+        local value = poll(InputHook.GET_ACTION_VALUE, action)
+        assertEqual(poll(InputHook.IS_ACTION_PRESSED, action), value > 0.001,
+            "analog turn held axes agree with values")
+        assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, action), false,
+            "analog turn never restarts gesture")
     end
 end
 
@@ -327,21 +407,21 @@ frame = 32
 setStick(0, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "direct snapback releases original direction")
 frame = 34
-assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "direct snapback returns control")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "direct snapback releases value")
 
--- 回中只允许两帧采样防抖；pressed 始终交还原版，不能制造 45 帧发射延迟。
+-- 方向与按住状态共用两帧防抖，不能制造 45 帧发射延迟。
 reset(40)
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "hold acquire")
 frame = 41
 setStick(0, 0)
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "release pressed stays native")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), true, "release pressed uses bounded debounce")
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "release debounce frame zero")
 frame = 42
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "release debounce frame one")
 frame = 43
-assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), nil, "release returns control")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "released pressed stays native")
+assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 0, "release returns zero")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), false, "released pressed is false")
 frame = 44
 setStick(1, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "next attack is not guarded")
@@ -409,7 +489,7 @@ assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1,
 frame = 112
 setStick(0, 0)
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "generic familiar keeps normal debounce")
-assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), nil, "generic familiar pressed native")
+assertEqual(poll(InputHook.IS_ACTION_PRESSED, ButtonAction.ACTION_SHOOTRIGHT), true, "generic familiar follows bounded debounce")
 
 -- 真正的蓄力宝宝仍使用专用释放路径。
 reset(120)
@@ -531,8 +611,10 @@ assertEqual(
     "shared controller tainted initial trigger"
 )
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "shared controller generic output")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), true, "shared generic owns its trigger")
 frame = 181
 assertEqual(poll(InputHook.GET_ACTION_VALUE, ButtonAction.ACTION_SHOOTRIGHT), 1, "shared generic remains active")
+assertEqual(poll(InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT), false, "shared generic does not retrigger")
 assertEqual(
     pollFor(taintedSharedPlayer, InputHook.IS_ACTION_TRIGGERED, ButtonAction.ACTION_SHOOTRIGHT),
     false,

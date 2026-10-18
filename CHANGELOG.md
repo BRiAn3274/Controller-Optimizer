@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.7.3 - 2026-10-18
+
+- In Repentance+, use a single gesture state for ordinary Brimstone direction,
+  held input, and trigger input, targeting the short-release interruption seen
+  while slowly withdrawing a fully charged stick through partial travel.
+- Emit a trigger only on the initial frame, retain held input through partial
+  travel, and explicitly suppress sub-threshold idle input. Keep the existing
+  two-frame default center debounce; do not add a long virtual hold.
+- Preserve attack-shape item pass-through, Analog Stick aiming, Tainted Azazel's
+  separate sequence, and base Repentance's native pressed/triggered behavior.
+- Add slow-withdrawal, partial-hold, release, dropout, next-gesture, 360-degree,
+  and shared-controller input-contract checks. Gameplay verification is pending;
+  no claim is made about a confirmed Lilith-specific fix.
+
 ## 1.7.2 - 2026-10-16
 
 - Add Ludovico Technique to attack-shape pass-through so Brimstone and Tainted

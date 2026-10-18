@@ -1,5 +1,5 @@
 local MOD_NAME = "Controller Optimizer"
-local VERSION = "1.7.2"
+local VERSION = "1.7.3"
 local mod = RegisterMod(MOD_NAME, 1)
 local IS_REPENTANCE_PLUS = REPENTANCE_PLUS == true
 
@@ -1264,8 +1264,8 @@ local function finishShootRelease(state, reason, suppressRaw)
     updateOutputs(state)
 end
 
--- 普通 Brimstone/Azazel 只稳定方向值。triggered/pressed 仍由原版处理，
--- 避免 Mod 把已经回中的摇杆继续伪装成“按住”而延迟发射。
+-- Repentance+ 的普通 Brimstone/Azazel 共用一次手势的方向、按住和触发状态。
+-- 收杆途中的中间行程不能提前释放或再次触发；回中防抖默认仍为两帧。
 local function refreshGenericBrimstoneState(state, controllerIndex, player)
     local frame = getFrameCount()
     if state.frame == frame then
@@ -1308,6 +1308,9 @@ local function refreshGenericBrimstoneState(state, controllerIndex, player)
             end
         elseif shouldAcceptLiveDirection(state, x, y, frame) then
             local previousOutputDir = state.outputDir
+            if not state.active then
+                state.triggerFrame = frame
+            end
             state.x = x
             state.y = y
             state.active = true
@@ -1597,6 +1600,21 @@ local function handleTaintedAzazelShootInput(state, inputHook, buttonAction)
 end
 
 local function handleGenericShootInput(state, inputHook, buttonAction)
+    if IS_REPENTANCE_PLUS then
+        -- 原生半推输入可能与满推输入采用不同的蓄力/触发判定。
+        -- 三类查询必须回答同一份手势状态，不能只把方向值伪装成满推。
+        -- 闲置和释放时也明确返回零/false，阻止死区内的原生输入漏回。
+        local output = state.active and (getShootOutput(state, buttonAction) or 0) or 0
+        if inputHook == InputHook.IS_ACTION_TRIGGERED then
+            return state.active and getFrameCount() == state.triggerFrame and output > 0.001
+        end
+        if isActionPressedHook(inputHook) then
+            return state.active and output > 0.001
+        end
+        return output
+    end
+
+    -- 普通 Repentance 保留原来的方向滤波与原生按下/触发状态。
     if inputHook == InputHook.IS_ACTION_TRIGGERED or isActionPressedHook(inputHook) then
         if state.releaseReason == "chargeFamiliarReleased" and
             state.rawMagnitude < Config.EnterDeadzone then

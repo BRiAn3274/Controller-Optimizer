@@ -29,6 +29,12 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [h2]Current Version[/h2]
 
+[h2]Version 1.7.3 - Brimstone partial-stick input handling[/h2]
+
+In Repentance+, ordinary Brimstone now uses one gesture state for direction, held input, and initial trigger. This targets interruptions while slowly withdrawing a fully charged stick through partial travel. The default center debounce remains two frames. Gameplay verification is pending.
+
+[b]Previous changes[/b]
+
 [h2]Version 1.7.2 - Ludovico and controller input compatibility[/h2]
 
 [list]
@@ -53,7 +59,7 @@ This mod tries to prevent left-stick movement from triggering Mars, reducing acc
 
 [list]
 [*]Removed the old 45-frame virtual direction hold that could keep Brimstone charging after the player returned the stick to center.
-[*]Ordinary Azazel now leaves the game's triggered and pressed/released states native. The mod only stabilizes direction values and covers a two-frame input dropout.
+[*]In Repentance+, ordinary Azazel now keeps direction, held input, and trigger input consistent throughout one stick gesture, including partial travel. Center release uses the existing short debounce, two frames by default.
 [*]Full-charge attacks release promptly while retaining protection against brief controller sampling loss.
 [/list]
 
@@ -86,9 +92,9 @@ When holding Eye of the Occult, Soy Milk, The Marked, or Ludovico Technique with
 
 The mod only filters input values. It does not directly create Hemoptysis, Brimstone lasers, damage, or charge completion, and it does not modify laser lifetime or attack entities. Those remain controlled by the game.
 
-Ordinary Brimstone keeps native pressed and triggered states. Familiar release compatibility is input-only and limited to the original Lil Brimstone and Lil Monstro. Unrelated and custom familiars are left untouched. Mars keeps native held movement state, and Schoolbag quick swap requires the real collectible, two occupied slots, and an unambiguous controller target.
+Ordinary Brimstone uses consistent direction, held, and initial-trigger input in Repentance+; base Repentance retains native pressed and triggered states. Familiar release compatibility is input-only and limited to the original Lil Brimstone and Lil Monstro. Unrelated and custom familiars are left untouched. Mars keeps native held movement state, and Schoolbag quick swap requires the real collectible, two occupied slots, and an unambiguous controller target.
 
-Version 1.7.2 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Ludovico Technique, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
+Version 1.7.3 includes automated controller-input, attack-shape pass-through, conflict-boundary, shared-controller, Mars, Schoolbag, familiar-scope, and optional-API regression tests. Ordinary and Tainted Azazel, Analog Stick, Eye of the Occult, Soy Milk, The Marked, Ludovico Technique, Lil Brimstone, Lil Monstro, Twisted Pair, Schoolbag, and D Infinity behavior require Steam Deck verification before release.
 
 [h2]Notes[/h2]
 
@@ -103,7 +109,7 @@ I will continue maintaining this mod, but updates will be less frequent than bef
 The original purpose of this mod is simply to improve the controller experience before the related Repentance+ issues are officially fixed.
 
 Hopefully, controller players will eventually be able to fire Brimstone smoothly with the analog stick even without this mod.</description>
-    <version>1.7.2</version>
+    <version>1.7.3</version>
     <visibility>Public</visibility>
     <tag id="Lua"/>
     <tag id="Tweaks"/>
